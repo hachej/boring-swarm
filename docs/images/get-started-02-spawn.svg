@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560">
+  <rect width="1280" height="560" fill="#0b1220"/>
+  <rect x="0" y="0" width="1280" height="36" fill="#111827"/>
+  <circle cx="18" cy="18" r="6" fill="#ef4444"/>
+  <circle cx="38" cy="18" r="6" fill="#f59e0b"/>
+  <circle cx="58" cy="18" r="6" fill="#10b981"/>
+  <text x="78" y="23" font-family="Menlo, Monaco, Consolas, monospace" font-size="14" fill="#93c5fd">boring-drawing — bsw sessions</text>
+  <g font-family="Menlo, Monaco, Consolas, monospace" font-size="17" fill="#e5e7eb">
+    <text x="24" y="72">$ bsw spawn</text>
+    <text x="24" y="102">session ready: boring-drawing-bsw</text>
+    <text x="24" y="138">$ bsw sessions</text>
+    <text x="24" y="170">SESSION             PANE ROLE       STATE    BEAD        PROVIDER MODEL        DUR</text>
+    <text x="24" y="198">boring-drawing-bsw  2    implement  busy     bd-2z3      codex    gpt-5.3-codex 2h</text>
+    <text x="24" y="226">boring-drawing-bsw  3    implement  busy     bd-1uy      codex    gpt-5.3-codex 21h</text>
+    <text x="24" y="254">boring-drawing-bsw  5    implement  busy     bd-2qw      codex    gpt-5.3-codex -</text>
+    <text x="24" y="282">boring-drawing-bsw  6    implement  busy     bd-y9t      codex    gpt-5.3-codex 24m</text>
+    <text x="24" y="310">boring-drawing-bsw  7    proof      waiting  bd-3bo      cc       opus         41m</text>
+    <text x="24" y="338">boring-drawing-bsw  8    proof      busy     bd-2ud      cc       opus         12m</text>
+    <text x="24" y="366">boring-drawing-bsw  9    review     busy     bd-12c      cc       opus         10m</text>
+    <text x="24" y="430">$ bsw robot</text>
+    <text x="24" y="460">[robot] mode=hybrid sensor=1s debounce=250ms fallback=10s poll=4s</text>
+  </g>
+</svg>

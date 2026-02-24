@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="700" viewBox="0 0 1280 700">
+  <rect width="1280" height="700" fill="#090f1d"/>
+  <rect x="0" y="0" width="1280" height="38" fill="#111827"/>
+  <text x="20" y="25" font-family="Menlo, Monaco, Consolas, monospace" font-size="15" fill="#93c5fd">bsw tui</text>
+  <rect x="16" y="54" width="1248" height="94" fill="#0f172a" stroke="#334155"/>
+  <g font-family="Menlo, Monaco, Consolas, monospace" font-size="16" fill="#cbd5e1">
+    <text x="28" y="82">system status</text>
+    <text x="28" y="108">beads: total=79 active=42 open=29 in_progress=13 closed=30 tomb=7</text>
+    <text x="28" y="132">queues: impl=33 proof=0 review=1 | assigned: impl=4 proof=2 review=2</text>
+  </g>
+  <rect x="16" y="162" width="1248" height="412" fill="#0b1220" stroke="#334155"/>
+  <g font-family="Menlo, Monaco, Consolas, monospace" font-size="15" fill="#e5e7eb">
+    <text x="28" y="190">SESSION              PANE PANE_NAME      STATE    BEAD      PROVIDER MODEL DUR ACTIVITY</text>
+    <text x="28" y="218">■ boring-drawing-bsw  2    implement:01   busy     bd-2z3    codex    5.3   2h  transc:1m</text>
+    <text x="28" y="246">■ boring-drawing-bsw  3    implement:02   busy     bd-1uy    codex    5.3   21h transc:30s</text>
+    <text x="28" y="274">■ boring-drawing-bsw  5    implement:03   busy     bd-2qw    codex    5.3   -   transc:20s</text>
+    <text x="28" y="302">■ boring-drawing-bsw  6    implement:04   busy     bd-y9t    codex    5.3   24m transc:50s</text>
+    <text x="28" y="330">■ boring-drawing-bsw  8    proof:02       busy     bd-2ud    cc       opus  12m -</text>
+    <text x="28" y="358">■ boring-drawing-bsw  9    review:01      busy     bd-12c    cc       opus  10m -</text>
+  </g>
+  <rect x="16" y="588" width="1248" height="96" fill="#0f172a" stroke="#334155"/>
+  <g font-family="Menlo, Monaco, Consolas, monospace" font-size="14" fill="#94a3b8">
+    <text x="28" y="616">legend: ■implement ■proof ■review ■committer ■plan-review</text>
+    <text x="28" y="642">keys: tab switch view, j/k move, Enter zoom, r refresh, t toggle-log, q quit</text>
+    <text x="28" y="668">tick log: Δ pane=8 proof:02 waiting/- -&gt; assigned/bd-2ud</text>
+  </g>
+</svg>

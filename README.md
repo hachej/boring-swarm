@@ -26,6 +26,67 @@ bsw robot
 - `bsw doctor` validates deps + local flow/prompt files.
 - `bsw robot` runs hardened hybrid scheduling for autonomous operation.
 
+## Get Started (With Screenshots)
+
+### 1) Initialize swarm files in your project
+
+```bash
+cd /path/to/your-project
+bsw init
+bsw doctor
+```
+
+This creates:
+- `.bsw/config.json`
+- `.bsw/flow.toml`
+- `.bsw/prompts/*.md`
+
+![bsw init and doctor](docs/images/get-started-01-init.svg)
+
+### 2) Spawn tmux worker panes
+
+```bash
+bsw spawn
+bsw sessions
+```
+
+This starts role-specific panes (`implement`, `proof`, `review`, `committer`, `plan-review`) and applies profile colors.
+
+![bsw spawn and sessions](docs/images/get-started-02-spawn.svg)
+
+### 3) Start autonomous orchestration (robot mode)
+
+```bash
+bsw robot
+```
+
+`robot` runs hybrid scheduling with event + fallback ticks. It auto-assigns beads, nudges waiting workers, and can recycle unhealthy panes.
+
+### 4) Open the TUI dashboard
+
+```bash
+bsw tui
+```
+
+Use the TUI for:
+- system status and queue health
+- live pane/session states
+- bead lifecycle/timeline view
+- tick log inspection
+
+![bsw tui dashboard](docs/images/get-started-03-tui.svg)
+
+### 5) Customize workflow behavior
+
+Edit `.bsw/flow.toml` to change:
+- states and transitions
+- worker counts per role
+- provider/model/effort
+- lifecycle policy (`max_idle`, `max_lifetime`, `max_busy_without_progress`)
+- role colors (`color_bg`, `color_fg`, `tmux_bg`, `tmux_fg`)
+
+DSL reference: `docs/FLOW_DSL.md`
+
 ## Structure
 
 ```

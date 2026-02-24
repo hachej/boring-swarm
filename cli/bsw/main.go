@@ -46,6 +46,7 @@ var (
 		"sh":   true,
 		"fish": true,
 	}
+	paneStyleCache = map[string]string{}
 )
 
 type Config struct {
@@ -2133,7 +2134,7 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 				}
 			}
 			if provider == "codex" {
-				if transcriptPath != "" && !transcriptLikelyFromCurrentLaunch(transcriptPath, launchedAt) {
+				if transcriptPath != "" && !transcriptLikelyFromCurrentLaunch(transcriptPath, launchedAt, sessionID) {
 					delete(usedTranscriptPaths, expandHome(transcriptPath))
 					transcriptPath = ""
 					sessionID = ""
@@ -2216,12 +2217,22 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 
 		if st.State == "busy" && strings.TrimSpace(st.BeadID) != "" && cfg.IdleSeconds > 0 {
 			idleCutoff := idleCutoffForWorker(cfg, st.Provider)
-			if st.TranscriptAge > idleCutoff {
-				st.State = "waiting"
-				st.Reason = "transcript-idle"
-			} else if st.ActivityAge > idleCutoff && (st.TranscriptAge == 0 || st.TranscriptAge > idleCutoff) {
-				st.State = "waiting"
-				st.Reason = "assigned-idle"
+			if normalizeProvider(st.Provider) == "codex" {
+				// Codex can pause UI output briefly; require stronger idle evidence to avoid false waiting.
+				if st.TokenPerMinute <= 0 && idleCutoff > 0 &&
+					st.ActivityAge > idleCutoff &&
+					(st.TranscriptAge == 0 || st.TranscriptAge > idleCutoff) {
+					st.State = "waiting"
+					st.Reason = "assigned-idle"
+				}
+			} else {
+				if st.TranscriptAge > idleCutoff {
+					st.State = "waiting"
+					st.Reason = "transcript-idle"
+				} else if st.ActivityAge > idleCutoff && (st.TranscriptAge == 0 || st.TranscriptAge > idleCutoff) {
+					st.State = "waiting"
+					st.Reason = "assigned-idle"
+				}
 			}
 		}
 		if st.State == "busy" && strings.TrimSpace(st.BeadID) != "" {
@@ -2230,7 +2241,10 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 				// For codex, only accept waiting when we also have idle-age evidence.
 				if stateHint == "waiting" && normalizeProvider(st.Provider) == "codex" {
 					idleCutoff := idleCutoffForWorker(cfg, st.Provider)
-					if (idleCutoff > 0 && st.TranscriptAge > idleCutoff) || (idleCutoff > 0 && st.ActivityAge > idleCutoff) {
+					if st.TokenPerMinute <= 0 &&
+						idleCutoff > 0 &&
+						st.ActivityAge > idleCutoff &&
+						(st.TranscriptAge == 0 || st.TranscriptAge > idleCutoff) {
 						st.State = stateHint
 						st.Reason = reason
 					}
@@ -2313,8 +2327,16 @@ func ensureSessionAndPanes(cfg Config) error {
 			unused = append(unused, p)
 		}
 	}
+	// Ensure style is applied for every known worker pane, including dynamic roles
+	// like plan-review that may not be listed in config.roles.
+	for _, p := range panes {
+		if _, ok := parseWorkerTitle(p.PaneTitle); ok {
+			applyPaneProfileStyle(cfg.Session, p.PaneIndex, p.PaneTitle)
+		}
+	}
 
 	desiredByRole := desiredWorkersByRole(cfg)
+	topologyChanged := false
 
 	for _, role := range cfg.Roles {
 		workers := desiredByRole[role.Name]
@@ -2322,6 +2344,26 @@ func ensureSessionAndPanes(cfg Config) error {
 			wid := workerID(cfg.Session, role.Name, idx)
 			if existing, ok := paneByTitle[wid]; ok {
 				applyPaneProfileStyle(cfg.Session, existing.PaneIndex, wid)
+				if detached, reason, _ := detectPaneDetached(cfg.Session, existing.PaneIndex); detached {
+					target := fmt.Sprintf("%s.%d", cfg.Session, existing.PaneIndex)
+					_, _ = runCommand("", "tmux", "kill-pane", "-t", target)
+					topologyChanged = true
+					repl, err := splitPane(cfg.Session)
+					if err != nil {
+						return err
+					}
+					topologyChanged = true
+					if err := setPaneTitle(cfg.Session, repl.PaneIndex, wid); err != nil {
+						return err
+					}
+					applyPaneProfileStyle(cfg.Session, repl.PaneIndex, wid)
+					maybeRegisterWorker(cfg, role, wid)
+					if err := launchWorker(cfg, role, wid, repl.PaneIndex); err != nil {
+						return err
+					}
+					fmt.Fprintf(os.Stderr, "warning: respawned detached pane %s (%s)\n", wid, reason)
+					continue
+				}
 				if shellCommands[strings.ToLower(existing.CurrentCommand)] {
 					maybeRegisterWorker(cfg, role, wid)
 					if err := launchWorker(cfg, role, wid, existing.PaneIndex); err != nil {
@@ -2341,6 +2383,7 @@ func ensureSessionAndPanes(cfg Config) error {
 					return err
 				}
 				pane = created
+				topologyChanged = true
 			}
 
 			if err := setPaneTitle(cfg.Session, pane.PaneIndex, wid); err != nil {
@@ -2358,6 +2401,19 @@ func ensureSessionAndPanes(cfg Config) error {
 			wid := workerID(cfg.Session, role.Name, idx)
 			if p, ok := paneByTitle[wid]; ok {
 				_, _ = runCommand("", "tmux", "kill-pane", "-t", fmt.Sprintf("%s.%d", cfg.Session, p.PaneIndex))
+				topologyChanged = true
+			}
+		}
+	}
+
+	// tmux can reset pane style after split/kill/layout changes; force full restyle once.
+	if topologyChanged {
+		paneStyleCache = map[string]string{}
+		if refreshed, err := listPanes(cfg.Session, false); err == nil {
+			for _, p := range refreshed {
+				if _, ok := parseWorkerTitle(p.PaneTitle); ok {
+					applyPaneProfileStyle(cfg.Session, p.PaneIndex, p.PaneTitle)
+				}
 			}
 		}
 	}
@@ -2640,8 +2696,15 @@ func applyPaneProfileStyle(session string, pane int, workerID string) {
 	}
 	theme := roleThemeFor(role)
 	target := fmt.Sprintf("%s.%d", session, pane)
+	cacheKey := target
+	cacheVal := role + "|" + theme.TmuxBG + "|" + theme.TmuxFG
+	if prev, ok := paneStyleCache[cacheKey]; ok && prev == cacheVal {
+		return
+	}
 	style := fmt.Sprintf("bg=%s,fg=%s", theme.TmuxBG, theme.TmuxFG)
-	_, _ = runCommand("", "tmux", "select-pane", "-t", target, "-P", style)
+	if _, err := runCommand("", "tmux", "select-pane", "-t", target, "-P", style); err == nil {
+		paneStyleCache[cacheKey] = cacheVal
+	}
 }
 
 func renderRoleLegendLine() string {
@@ -2977,6 +3040,41 @@ func detectPaneStateHint(session string, pane int) (string, string, error) {
 		return "waiting", "agent-idle", nil
 	}
 	return "", "", nil
+}
+
+func detectPaneDetached(session string, pane int) (bool, string, error) {
+	out, err := runCommand("", "tmux", "capture-pane", "-p", "-t", fmt.Sprintf("%s.%d", session, pane), "-S", "-120")
+	if err != nil {
+		return false, "", err
+	}
+	lower := strings.ToLower(out)
+	type rule struct {
+		reason   string
+		patterns []string
+	}
+	rules := []rule{
+		{reason: "session-ended", patterns: []string{"session has ended"}},
+		{reason: "session-ended-enter", patterns: []string{"session ended", "press enter"}},
+		{reason: "session-killed", patterns: []string{"session was killed"}},
+		{reason: "session-missing", patterns: []string{"session no longer exists"}},
+		{reason: "session-not-found", patterns: []string{"error: session not found"}},
+		{reason: "session-cannot-resume", patterns: []string{"cannot resume session"}},
+		{reason: "conversation-not-found", patterns: []string{"conversation not found"}},
+		{reason: "resume-prompt", patterns: []string{"resume with", "session id"}},
+	}
+	for _, r := range rules {
+		ok := true
+		for _, p := range r.patterns {
+			if !strings.Contains(lower, p) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true, r.reason, nil
+		}
+	}
+	return false, "", nil
 }
 
 func setPaneTitle(session string, pane int, title string) error {
@@ -4550,7 +4648,7 @@ func canAssignBeadToWorker(rt WorkerRuntime, beadID string, now time.Time, coold
 	return now.Sub(last) >= cooldown
 }
 
-func transcriptLikelyFromCurrentLaunch(path string, launchedAt time.Time) bool {
+func transcriptLikelyFromCurrentLaunch(path string, launchedAt time.Time, sessionID string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
 	}
@@ -4561,6 +4659,19 @@ func transcriptLikelyFromCurrentLaunch(path string, launchedAt time.Time) bool {
 	info, err := os.Stat(expandHome(path))
 	if err != nil {
 		return false
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		base := filepath.Base(strings.TrimSpace(path))
+		if !strings.Contains(base, strings.TrimSpace(sessionID)) {
+			return false
+		}
+	}
+	// If transcript metadata has a session start, ensure it is near/after this worker launch.
+	// This prevents stale previous-day sessions from being reused when pane survives rebinding.
+	if meta, ok := loadCodexSessionMeta(expandHome(path)); ok && !meta.StartedAt.IsZero() {
+		if meta.StartedAt.Before(launchedAt.Add(-10 * time.Minute)) {
+			return false
+		}
 	}
 	return !info.ModTime().Before(launchedAt.Add(-2 * time.Minute))
 }
@@ -5841,7 +5952,7 @@ func (m tuiModel) viewSessions() string {
 	if height <= 0 {
 		height = 40
 	}
-	cols := fitTUIColumns(width)
+	cols := fitTUIColumns(width, maxSessionCellWidth(m.rows), maxPaneNameCellWidth(m.rows))
 	// Keep tick log compact so worker table remains primary on regular terminal heights.
 	logHeight := clamp(max(3, height/5), 3, 8)
 	if !m.showTickLog {
@@ -5864,8 +5975,7 @@ func (m tuiModel) viewSessions() string {
 	header := strings.Join([]string{
 		padCell("SESSION", cols.Session),
 		padCell("PANE", cols.Pane),
-		padCell("ROLE", cols.Role),
-		padCell("AGENT", cols.Agent),
+		padCell("PANE_NAME", cols.PaneName),
 		padCell("STATE", cols.State),
 		padCell("BEAD", cols.Bead),
 		padCell("PROVIDER", cols.Provider),
@@ -5909,8 +6019,7 @@ func (m tuiModel) viewSessions() string {
 			line := strings.Join([]string{
 				padCell(r.Session, cols.Session),
 				padCell(strconv.Itoa(r.Pane), cols.Pane),
-				padCell(r.Role, cols.Role),
-				padCell(r.AgentName, cols.Agent),
+				padCell(shortWorkerName(r.WorkerID), cols.PaneName),
 				padCell(r.State, cols.State),
 				padCell(bead, cols.Bead),
 				padCell(r.Provider, cols.Provider),
@@ -6256,7 +6365,7 @@ func shortWorkerName(workerID string) string {
 type tuiColumns struct {
 	Session  int
 	Pane     int
-	Role     int
+	PaneName int
 	Agent    int
 	State    int
 	Bead     int
@@ -6267,26 +6376,32 @@ type tuiColumns struct {
 	Activity int
 }
 
-func fitTUIColumns(total int) tuiColumns {
+func fitTUIColumns(total int, minSession int, minPaneName int) tuiColumns {
 	if total < 80 {
 		total = 80
 	}
 	cols := tuiColumns{
 		Pane:     4,
-		Role:     8,
-		Agent:    10,
+		PaneName: 14,
+		Agent:    0,
 		State:    8,
 		Provider: 6,
 		Effort:   6,
 		Duration: 6,
 	}
-	fixed := cols.Pane + cols.Role + cols.Agent + cols.State + cols.Provider + cols.Effort + cols.Duration
+	if minPaneName > cols.PaneName {
+		cols.PaneName = minPaneName
+	}
+	fixed := cols.Pane + cols.PaneName + cols.State + cols.Provider + cols.Effort + cols.Duration
 	remaining := total - fixed - 16
 	if remaining < 40 {
 		remaining = 40
 	}
 	// Prioritize full session visibility over model/activity when space is tight.
 	cols.Session = clamp(remaining*40/100, 16, 64)
+	if minSession > cols.Session {
+		cols.Session = minSession
+	}
 	cols.Bead = clamp(remaining*16/100, 8, 20)
 	cols.Model = clamp(remaining*16/100, 8, 18)
 	cols.Activity = remaining - cols.Session - cols.Bead - cols.Model
@@ -6303,6 +6418,22 @@ func fitTUIColumns(total int) tuiColumns {
 		cols.Activity = 10
 	}
 	return cols
+}
+
+func maxSessionCellWidth(rows []WorkerStatus) int {
+	w := visibleLen("SESSION")
+	for _, r := range rows {
+		w = max(w, visibleLen(strings.TrimSpace(r.Session)))
+	}
+	return w
+}
+
+func maxPaneNameCellWidth(rows []WorkerStatus) int {
+	w := visibleLen("PANE_NAME")
+	for _, r := range rows {
+		w = max(w, visibleLen(shortWorkerName(r.WorkerID)))
+	}
+	return w
 }
 
 func padCell(s string, w int) string {
