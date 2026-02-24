@@ -1,0 +1,145 @@
+version = 1
+start = "bead.implement"
+
+# bead lane: implement -> proof -> review
+[[states]]
+id = "bead.implement"
+kind = "bead"
+label = "needs-impl"
+workers = 4
+prompt = ".bsw/prompts/impl_worker.md"
+provider = "codex"
+model = "gpt-5.3-codex"
+effort = "medium"
+max_idle = "20m"
+max_lifetime = "3h"
+max_busy_without_progress = "30m"
+respawn = "true"
+color_bg = "#1e3a8a"
+color_fg = "#f8fbff"
+tmux_bg = "colour33"
+tmux_fg = "colour255"
+
+[[states]]
+id = "bead.proof"
+kind = "bead"
+label = "needs-proof"
+workers = 2
+prompt = ".bsw/prompts/impl_proofer.md"
+provider = "cc"
+model = "opus"
+effort = "high"
+max_idle = "15m"
+max_lifetime = "2h"
+max_busy_without_progress = "25m"
+respawn = "true"
+color_bg = "#92400e"
+color_fg = "#fff8f2"
+tmux_bg = "colour94"
+tmux_fg = "colour255"
+
+[[states]]
+id = "bead.review"
+kind = "bead"
+label = "needs-review"
+workers = 2
+prompt = ".bsw/prompts/impl_reviewer.md"
+provider = "cc"
+model = "opus"
+effort = "high"
+max_idle = "15m"
+max_lifetime = "2h"
+max_busy_without_progress = "25m"
+respawn = "true"
+color_bg = "#166534"
+color_fg = "#f3fff7"
+tmux_bg = "colour28"
+tmux_fg = "colour255"
+
+# async worker: commits after review closeout events
+[[states]]
+id = "worker.committer"
+kind = "worker"
+label = "commit-queue"
+workers = 1
+prompt = ".bsw/prompts/impl_committer.md"
+provider = "cc"
+model = "opus"
+effort = "medium"
+max_idle = "10m"
+max_lifetime = "90m"
+max_busy_without_progress = "20m"
+one_shot = "true"
+respawn = "true"
+color_bg = "#7c3aed"
+color_fg = "#f8f3ff"
+tmux_bg = "colour56"
+tmux_fg = "colour255"
+
+# plan closer: runs when bead queue is exhausted
+[[states]]
+id = "plan.review"
+kind = "plan"
+label = "plan-review"
+workers = 1
+prompt = ".bsw/prompts/plan_reviewer.md"
+provider = "cc"
+model = "opus"
+effort = "high"
+max_idle = "10m"
+max_lifetime = "90m"
+max_busy_without_progress = "20m"
+one_shot = "true"
+respawn = "true"
+color_bg = "#be123c"
+color_fg = "#fff1f2"
+tmux_bg = "colour161"
+tmux_fg = "colour255"
+
+[[states]]
+id = "plan.done"
+kind = "terminal"
+
+# transitions
+[[transitions]]
+from = "bead.implement"
+on = "state:impl:done"
+to = "bead.proof"
+actions = ["clear_assignee", "set_label:needs-proof", "remove_label:needs-impl"]
+
+[[transitions]]
+from = "bead.proof"
+on = "state:proof:passed"
+to = "bead.review"
+actions = ["clear_assignee", "set_label:needs-review", "remove_label:needs-proof"]
+
+[[transitions]]
+from = "bead.proof"
+on = "state:proof:failed"
+to = "bead.implement"
+actions = ["clear_assignee", "set_label:needs-impl", "remove_label:needs-proof"]
+
+[[transitions]]
+from = "bead.review"
+on = "state:review:failed"
+to = "bead.implement"
+actions = ["clear_assignee", "set_label:needs-impl", "remove_label:needs-review"]
+
+[[transitions]]
+from = "bead.review"
+on = "state:review:passed"
+to = "plan.review"
+actions = ["clear_assignee", "remove_label:needs-review", "close_bead"]
+
+[[transitions]]
+from = "plan.review"
+on = "condition:no_active_bead_work"
+guard = "run_plan_reviewer_once"
+to = "plan.review"
+actions = ["run_plan_reviewer"]
+
+[[transitions]]
+from = "plan.review"
+on = "condition:no_active_bead_work"
+to = "plan.done"
+actions = ["set_plan_state:done", "stop_daemon"]

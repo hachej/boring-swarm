@@ -24,15 +24,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/pelletier/go-toml/v2"
 )
-
-// version is set at build time via -ldflags
-var version = "dev"
 
 const (
 	defaultConfigPath = ".bsw/config.json"
 	defaultMetaPath   = ".bsw/swarm.toml"
-	defaultFlowPath   = ".bsw/flow.yaml"
+	defaultFlowPath   = ".bsw/flow.toml"
 	defaultActor      = "bsw"
 	tmuxFieldSep      = "_BSW_SEP_"
 )
@@ -89,28 +87,47 @@ func (s *stringSliceFlag) String() string {
 }
 
 type FlowSpec struct {
-	Version     int
-	Start       string
-	States      []FlowState
-	Transitions []FlowTransition
+	Version     int              `toml:"version"`
+	Start       string           `toml:"start"`
+	States      []FlowState      `toml:"states"`
+	Transitions []FlowTransition `toml:"transitions"`
 }
 
 type FlowState struct {
-	ID       string
-	Kind     string
-	Label    string
-	Prompt   string
-	Provider string
-	Model    string
-	Effort   string
+	ID                     string `toml:"id"`
+	Kind                   string `toml:"kind"`
+	Label                  string `toml:"label"`
+	Prompt                 string `toml:"prompt"`
+	Provider               string `toml:"provider"`
+	Model                  string `toml:"model"`
+	Effort                 string `toml:"effort"`
+	Workers                int    `toml:"workers"`
+	MaxIdle                string `toml:"max_idle"`
+	MaxLifetime            string `toml:"max_lifetime"`
+	MaxBusyWithoutProgress string `toml:"max_busy_without_progress"`
+	Respawn                string `toml:"respawn"`
+	OneShot                string `toml:"one_shot"`
+	ColorBG                string `toml:"color_bg"`
+	ColorFG                string `toml:"color_fg"`
+	TmuxBG                 string `toml:"tmux_bg"`
+	TmuxFG                 string `toml:"tmux_fg"`
+}
+
+type WorkerLifecyclePolicy struct {
+	Workers                int
+	MaxIdle                time.Duration
+	MaxLifetime            time.Duration
+	MaxBusyWithoutProgress time.Duration
+	Respawn                bool
+	OneShot                bool
 }
 
 type FlowTransition struct {
-	From    string
-	On      string
-	To      string
-	Guard   string
-	Actions []string
+	From    string   `toml:"from"`
+	On      string   `toml:"on"`
+	To      string   `toml:"to"`
+	Guard   string   `toml:"guard"`
+	Actions []string `toml:"actions"`
 }
 
 func (s *stringSliceFlag) Set(v string) error {
@@ -247,9 +264,12 @@ type LifecycleCounts struct {
 
 type LifecycleBeadRow struct {
 	ID             string
+	Title          string
 	Stage          string
 	Status         string
 	Assignee       string
+	Current        string
+	Timeline       []string
 	ImplDone       int
 	ProofFailed    int
 	ProofPassed    int
@@ -290,15 +310,16 @@ func main() {
 		err = runTick(args)
 	case "daemon":
 		err = runDaemon(args)
+	case "robot":
+		err = runRobot(args)
+	case "doctor":
+		err = runDoctor(args)
 	case "status", "sessions":
 		err = runStatus(args)
 	case "tui":
 		err = runTUI(args)
 	case "zoom":
 		err = runZoom(args)
-	case "version", "-v", "--version":
-		fmt.Println(version)
-		return
 	case "help", "-h", "--help":
 		printUsage()
 		return
@@ -323,6 +344,8 @@ Usage:
   bsw tick   [--config .bsw/config.json]
   bsw tock   [--config .bsw/config.json]   # alias of tick
   bsw daemon [--config .bsw/config.json] [--once] [--poll 5]
+  bsw robot  [--config .bsw/config.json] [--once]
+  bsw doctor [--config .bsw/config.json]
   bsw status [--config .bsw/config.json]
   bsw sessions [--config .bsw/config.json] # alias of status
   bsw tui    [--config .bsw/config.json] [--refresh 1]
@@ -331,9 +354,115 @@ Usage:
 Design:
 - Assignment state lives in beads only (assignee/owner/labels/comments).
 - Worker roles are strict: implement, proof, review.
-- Declarative state machine lives in .bsw/flow.yaml.
+- Declarative state machine lives in .bsw/flow.toml.
 - Optional transcript metrics from role.transcript_glob (codex/claude JSONL).
 - Optional Agent Mail auto-register on worker launch.`)
+}
+
+func runRobot(args []string) error {
+	defaults := []string{
+		"--mode", "hybrid",
+		"--sensor", "1",
+		"--debounce-ms", "250",
+		"--fallback", "10",
+		"--poll", "4",
+	}
+	fmt.Println("[robot] mode=hybrid sensor=1s debounce=250ms fallback=10s poll=4s")
+	return runDaemon(append(defaults, args...))
+}
+
+func runDoctor(args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath, "path to config")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
+
+	type check struct {
+		name string
+		err  error
+	}
+	var checks []check
+	mustFile := func(path string) error {
+		_, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	mustCmd := func(name string) error {
+		_, err := exec.LookPath(name)
+		return err
+	}
+
+	flowPath := filepath.Join(cfg.ProjectRoot, defaultFlowPath)
+	checks = append(checks, check{name: "config", err: nil})
+	checks = append(checks, check{name: "flow.toml", err: mustFile(flowPath)})
+	if flow, ferr := loadFlowSpec(cfg.ProjectRoot); ferr != nil {
+		checks = append(checks, check{name: "flow.parse", err: ferr})
+	} else {
+		if len(flow.States) == 0 {
+			checks = append(checks, check{name: "flow.states", err: errors.New("no states defined")})
+		}
+		if len(flow.Transitions) == 0 {
+			checks = append(checks, check{name: "flow.transitions", err: errors.New("no transitions defined")})
+		}
+	}
+
+	for _, role := range cfg.Roles {
+		p := strings.TrimSpace(expandHome(role.PromptFile))
+		checks = append(checks, check{name: "prompt:" + role.Name, err: mustFile(p)})
+	}
+	if cfg.PlanReview.Enabled {
+		p := strings.TrimSpace(expandHome(cfg.PlanReview.PromptFile))
+		checks = append(checks, check{name: "prompt:plan-review", err: mustFile(p)})
+	}
+
+	checks = append(checks,
+		check{name: "dep:tmux", err: mustCmd("tmux")},
+		check{name: "dep:br", err: mustCmd("br")},
+		check{name: "dep:ntm", err: mustCmd("ntm")},
+	)
+	needCodex := false
+	needCC := false
+	for _, r := range cfg.Roles {
+		switch normalizeProvider(r.Provider) {
+		case "codex":
+			needCodex = true
+		case "cc":
+			needCC = true
+		}
+	}
+	if needCodex {
+		checks = append(checks, check{name: "dep:codex", err: mustCmd("codex")})
+	}
+	if needCC {
+		checks = append(checks, check{name: "dep:cc", err: mustCmd("cc")})
+	}
+
+	failed := 0
+	fmt.Printf("doctor: project=%s session=%s\n", cfg.ProjectRoot, cfg.Session)
+	for _, c := range checks {
+		if c.err != nil {
+			failed++
+			fmt.Printf("  FAIL %-18s %v\n", c.name, c.err)
+		} else {
+			fmt.Printf("  OK   %s\n", c.name)
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("doctor found %d issue(s)", failed)
+	}
+	fmt.Println("doctor: all checks passed")
+	return nil
 }
 
 func runInit(args []string) error {
@@ -364,7 +493,10 @@ func runInit(args []string) error {
 		return fmt.Errorf("config already exists at %s (use --force)", cfgPath)
 	}
 
-	promptsRoot := filepath.Join(projectRoot, "docs", "workflow", "prompts")
+	promptsRoot := filepath.Join(projectRoot, ".bsw", "prompts")
+	if err := writeDefaultPromptSet(promptsRoot); err != nil {
+		return err
+	}
 	cfg := Config{
 		Session:     fmt.Sprintf("%s-bsw", slug(filepath.Base(projectRoot))),
 		ProjectRoot: projectRoot,
@@ -412,7 +544,7 @@ func runInit(args []string) error {
 				Provider:       "cc",
 				Model:          "opus",
 				Effort:         "medium",
-				PromptFile:     filepath.Join(promptsRoot, "imple_commiter.md"),
+				PromptFile:     filepath.Join(promptsRoot, "impl_committer.md"),
 				LaunchCommand:  "",
 				TranscriptGlob: "~/.claude/projects/*/*.jsonl",
 			},
@@ -454,7 +586,7 @@ func runInit(args []string) error {
 		fmt.Printf("attached swarm meta: %s\n", metaPath)
 	}
 	flowPath := filepath.Join(projectRoot, defaultFlowPath)
-	if err := writeDefaultFlowYAML(flowPath); err != nil {
+	if err := writeDefaultFlowTOML(flowPath); err != nil {
 		return err
 	}
 	fmt.Printf("initialized flow: %s\n", flowPath)
@@ -651,6 +783,7 @@ func ensureAddedRoleWorkers(cfg Config, role RoleConfig, startIdx, endIdx int) e
 		if err := setPaneTitle(cfg.Session, pane.PaneIndex, wid); err != nil {
 			return err
 		}
+		applyPaneProfileStyle(cfg.Session, pane.PaneIndex, wid)
 		maybeRegisterWorker(cfg, role, wid)
 		if err := launchWorker(cfg, role, wid, pane.PaneIndex); err != nil {
 			return err
@@ -905,6 +1038,136 @@ func flowWantsStopOnNoWork(flow FlowSpec) bool {
 	return false
 }
 
+func inferCurrentFlowNode(flow FlowSpec, stages WorkflowStageCounts, rows []WorkerStatus) string {
+	if len(flow.States) == 0 {
+		return ""
+	}
+	hasState := func(id string) bool {
+		for _, st := range flow.States {
+			if strings.EqualFold(strings.TrimSpace(st.ID), strings.TrimSpace(id)) {
+				return true
+			}
+		}
+		return false
+	}
+	if (stages.InImplementation+stages.QueueImpl+stages.AssignedImpl) > 0 && hasState("bead.implement") {
+		return "bead.implement"
+	}
+	if (stages.InProof+stages.QueueProof+stages.AssignedProof) > 0 && hasState("bead.proof") {
+		return "bead.proof"
+	}
+	if (stages.InReview+stages.QueueReview+stages.AssignedReview) > 0 && hasState("bead.review") {
+		return "bead.review"
+	}
+	for _, r := range rows {
+		if strings.EqualFold(strings.TrimSpace(r.Role), "plan-review") && !strings.EqualFold(strings.TrimSpace(r.State), "shell") {
+			if hasState("plan.review") {
+				return "plan.review"
+			}
+		}
+	}
+	if hasState("plan.done") {
+		return "plan.done"
+	}
+	if strings.TrimSpace(flow.Start) != "" {
+		return flow.Start
+	}
+	return ""
+}
+
+func renderFlowDAGLines(flow FlowSpec, current string, width int) []string {
+	if len(flow.States) == 0 {
+		return []string{reduce("(no .bsw/flow.toml states)", max(20, width-2))}
+	}
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	active := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	nodeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	nodeOrder := orderedFlowNodes(flow)
+	transByFrom := map[string][]FlowTransition{}
+	for _, tr := range flow.Transitions {
+		k := strings.TrimSpace(tr.From)
+		transByFrom[k] = append(transByFrom[k], tr)
+	}
+	stateByID := map[string]FlowState{}
+	for _, st := range flow.States {
+		stateByID[strings.TrimSpace(st.ID)] = st
+	}
+
+	lines := make([]string, 0, len(nodeOrder)+len(flow.Transitions)+8)
+	lines = append(lines, muted.Render("main lane (horizontal):"))
+	mainLane := make([]string, 0, len(nodeOrder))
+	for _, id := range nodeOrder {
+		st := stateByID[id]
+		label := compactFlowNodeLabel(id, st.Kind)
+		box := "[" + label + "]"
+		if strings.EqualFold(strings.TrimSpace(id), strings.TrimSpace(current)) {
+			box = active.Render(" " + box + " ")
+		} else {
+			box = nodeStyle.Render(box)
+		}
+		mainLane = append(mainLane, box)
+	}
+	lane := strings.Join(mainLane, muted.Render(" -> "))
+	lines = append(lines, reduce(lane, max(20, width-2)))
+
+	lines = append(lines, "")
+	lines = append(lines, muted.Render("edges:"))
+	for i, tr := range flow.Transitions {
+		from := compactFlowID(tr.From)
+		to := compactFlowID(tr.To)
+		on := strings.TrimSpace(tr.On)
+		if on == "" {
+			on = "-"
+		}
+		edge := fmt.Sprintf("%2d. %s ──[%s]──▶ %s", i+1, from, on, to)
+		if strings.TrimSpace(tr.Guard) != "" {
+			edge += "  guard:" + strings.TrimSpace(tr.Guard)
+		}
+		if len(tr.Actions) > 0 {
+			edge += "  actions:[" + strings.Join(tr.Actions, ", ") + "]"
+		}
+		lines = append(lines, muted.Render(reduce(edge, max(20, width-2))))
+	}
+	return lines
+}
+
+func compactFlowID(id string) string {
+	id = strings.TrimSpace(id)
+	id = strings.TrimPrefix(id, "bead.")
+	id = strings.TrimPrefix(id, "plan.")
+	return id
+}
+
+func compactFlowNodeLabel(id, kind string) string {
+	k := strings.TrimSpace(kind)
+	if k == "" {
+		k = "-"
+	}
+	return compactFlowID(id) + " [" + k + "]"
+}
+
+func orderedFlowNodes(flow FlowSpec) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	push := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	push(flow.Start)
+	for _, tr := range flow.Transitions {
+		push(tr.From)
+		push(tr.To)
+	}
+	for _, st := range flow.States {
+		push(st.ID)
+	}
+	return out
+}
+
 func hasActionableWork(cfg Config, statuses []WorkerStatus) bool {
 	assigned := countAssignedRows(statuses)
 	if assigned > 0 {
@@ -956,6 +1219,7 @@ func maybeLaunchPlanReviewer(cfg Config) (bool, error) {
 	if err := setPaneTitle(cfg.Session, pane.PaneIndex, workerID); err != nil {
 		return false, err
 	}
+	applyPaneProfileStyle(cfg.Session, pane.PaneIndex, workerID)
 	maybeRegisterWorker(cfg, role, workerID)
 	if err := launchWorker(cfg, role, workerID, pane.PaneIndex); err != nil {
 		return false, err
@@ -1092,79 +1356,255 @@ func parseTomlArray(raw string) []string {
 	return out
 }
 
-func writeDefaultFlowYAML(path string) error {
+const defaultFlowTOML = `version = 1
+start = "bead.implement"
+
+[[states]]
+id = "bead.implement"
+kind = "bead"
+label = "needs-impl"
+workers = 4
+prompt = ".bsw/prompts/impl_worker.md"
+provider = "codex"
+model = "gpt-5.3-codex"
+effort = "medium"
+max_idle = "20m"
+max_lifetime = "3h"
+max_busy_without_progress = "30m"
+respawn = "true"
+color_bg = "#1e3a8a"
+color_fg = "#f8fbff"
+tmux_bg = "colour33"
+tmux_fg = "colour255"
+
+[[states]]
+id = "bead.proof"
+kind = "bead"
+label = "needs-proof"
+workers = 2
+prompt = ".bsw/prompts/impl_proofer.md"
+provider = "cc"
+model = "opus"
+effort = "high"
+max_idle = "15m"
+max_lifetime = "2h"
+max_busy_without_progress = "25m"
+respawn = "true"
+color_bg = "#92400e"
+color_fg = "#fff8f2"
+tmux_bg = "colour94"
+tmux_fg = "colour255"
+
+[[states]]
+id = "bead.review"
+kind = "bead"
+label = "needs-review"
+workers = 2
+prompt = ".bsw/prompts/impl_reviewer.md"
+provider = "cc"
+model = "opus"
+effort = "high"
+max_idle = "15m"
+max_lifetime = "2h"
+max_busy_without_progress = "25m"
+respawn = "true"
+color_bg = "#166534"
+color_fg = "#f3fff7"
+tmux_bg = "colour28"
+tmux_fg = "colour255"
+
+[[states]]
+id = "worker.committer"
+kind = "worker"
+label = "commit-queue"
+workers = 1
+prompt = ".bsw/prompts/impl_committer.md"
+provider = "cc"
+model = "opus"
+effort = "medium"
+max_idle = "10m"
+max_lifetime = "90m"
+max_busy_without_progress = "20m"
+one_shot = "true"
+respawn = "true"
+color_bg = "#7c3aed"
+color_fg = "#f8f3ff"
+tmux_bg = "colour56"
+tmux_fg = "colour255"
+
+[[states]]
+id = "plan.review"
+kind = "plan"
+label = "plan-review"
+workers = 1
+prompt = ".bsw/prompts/plan_reviewer.md"
+provider = "cc"
+model = "opus"
+effort = "high"
+max_idle = "10m"
+max_lifetime = "90m"
+max_busy_without_progress = "20m"
+one_shot = "true"
+respawn = "true"
+color_bg = "#be123c"
+color_fg = "#fff1f2"
+tmux_bg = "colour161"
+tmux_fg = "colour255"
+
+[[states]]
+id = "plan.done"
+kind = "terminal"
+
+[[transitions]]
+from = "bead.implement"
+on = "state:impl:done"
+to = "bead.proof"
+actions = ["clear_assignee", "set_label:needs-proof", "remove_label:needs-impl"]
+
+[[transitions]]
+from = "bead.proof"
+on = "state:proof:passed"
+to = "bead.review"
+actions = ["clear_assignee", "set_label:needs-review", "remove_label:needs-proof"]
+
+[[transitions]]
+from = "bead.proof"
+on = "state:proof:failed"
+to = "bead.implement"
+actions = ["clear_assignee", "set_label:needs-impl", "remove_label:needs-proof"]
+
+[[transitions]]
+from = "bead.review"
+on = "state:review:failed"
+to = "bead.implement"
+actions = ["clear_assignee", "set_label:needs-impl", "remove_label:needs-review"]
+
+[[transitions]]
+from = "bead.review"
+on = "state:review:passed"
+to = "plan.review"
+actions = ["clear_assignee", "remove_label:needs-review", "close_bead"]
+
+[[transitions]]
+from = "plan.review"
+on = "condition:no_active_bead_work"
+guard = "run_plan_reviewer_once"
+to = "plan.review"
+actions = ["run_plan_reviewer"]
+
+[[transitions]]
+from = "plan.review"
+on = "condition:no_active_bead_work"
+to = "plan.done"
+actions = ["set_plan_state:done", "stop_daemon"]
+`
+
+var defaultPromptFiles = map[string]string{
+	"impl_worker.md": `# Implement Worker
+
+## Pre-Checklist
+1. Read AGENTS.md.
+2. Pull and inspect the assigned bead.
+3. Confirm scope and acceptance criteria.
+
+## Main Task
+1. Implement only the assigned bead.
+2. Keep changes minimal and coherent.
+3. If blocked, report blocker + unblocking action.
+
+## Post-Checklist
+1. Add bead comment with results and evidence paths.
+2. Emit SWARM_STATUS and wait for next instruction.
+`,
+	"impl_proofer.md": `# Proof Worker
+
+## Pre-Checklist
+1. Read AGENTS.md.
+2. Pull and inspect the assigned bead.
+3. Verify gate commands and evidence context.
+
+## Main Task
+1. Run required proof/gate commands.
+2. Record exact commands and outputs.
+3. Do not implement code changes.
+
+## Post-Checklist
+1. Add bead comment with PASS/FAIL and evidence.
+2. Emit SWARM_STATUS and wait for next instruction.
+`,
+	"impl_reviewer.md": `# Review Worker
+
+## Pre-Checklist
+1. Read AGENTS.md.
+2. Pull and inspect the assigned bead.
+3. Load implementation and proof evidence.
+
+## Main Task
+1. Review correctness, scope, and acceptance criteria.
+2. Request changes with concrete file-level guidance when needed.
+3. Do not commit.
+
+## Post-Checklist
+1. Add bead comment with review decision and rationale.
+2. Emit SWARM_STATUS and wait for next instruction.
+`,
+	"impl_committer.md": `# Committer Worker
+
+## Pre-Checklist
+1. Read AGENTS.md.
+2. Verify commit trigger context from orchestrator.
+
+## Main Task
+1. Commit and push current logical changes only.
+2. Use explicit commit messages.
+3. If no changes exist, report waiting.
+
+## Post-Checklist
+1. Emit SWARM_STATUS reason=cycle_complete or reason=no_changes.
+2. Return to waiting.
+`,
+	"plan_reviewer.md": `# Plan Reviewer
+
+## Pre-Checklist
+1. Read AGENTS.md.
+2. Load PLAN_FILE and active implementation pointers.
+
+## Main Task
+1. Build a checklist from the plan.
+2. Mark done vs missing with evidence.
+3. Run relevant gates/smoke checks.
+
+## Post-Checklist
+1. PASS: move plan to completed.
+2. FAIL: create follow-up beads for missing work.
+3. Emit SWARM_STATUS and wait.
+`,
+}
+
+func writeDefaultPromptSet(promptsRoot string) error {
+	if err := os.MkdirAll(promptsRoot, 0o755); err != nil {
+		return err
+	}
+	for name, content := range defaultPromptFiles {
+		path := filepath.Join(promptsRoot, name)
+		if _, err := os.Stat(path); err == nil {
+			continue
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeDefaultFlowTOML(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	content := `version: 1
-start: bead.implement
-
-states:
-  - id: bead.implement
-    kind: bead
-    label: needs-impl
-    prompt: docs/workflow/prompts/impl_worker.md
-    provider: codex
-    model: gpt-5.3-codex
-    effort: medium
-  - id: bead.proof
-    kind: bead
-    label: needs-proof
-    prompt: docs/workflow/prompts/impl_proofer.md
-    provider: cc
-    model: opus
-    effort: high
-  - id: bead.review
-    kind: bead
-    label: needs-review
-    prompt: docs/workflow/prompts/impl_reviewer.md
-    provider: cc
-    model: opus
-    effort: high
-  - id: plan.review
-    kind: plan
-    prompt: docs/workflow/prompts/plan_reviewer.md
-    provider: cc
-    model: opus
-    effort: high
-  - id: plan.done
-    kind: terminal
-
-transitions:
-  - from: bead.implement
-    on: state:impl:done
-    to: bead.proof
-    actions: [clear_assignee, set_label:needs-proof, remove_label:needs-impl]
-  - from: bead.proof
-    on: state:proof:passed
-    to: bead.review
-    actions: [clear_assignee, set_label:needs-review, remove_label:needs-proof]
-  - from: bead.proof
-    on: state:proof:failed
-    to: bead.implement
-    actions: [clear_assignee, set_label:needs-impl, remove_label:needs-proof]
-  - from: bead.review
-    on: state:review:failed
-    to: bead.implement
-    actions: [clear_assignee, set_label:needs-impl, remove_label:needs-review]
-  - from: bead.review
-    on: state:review:passed
-    to: plan.review
-    actions: [clear_assignee, remove_label:needs-review, close_bead]
-  - from: plan.review
-    on: condition:no_active_bead_work
-    guard: run_plan_reviewer_once
-    to: plan.review
-    actions: [run_plan_reviewer]
-  - from: plan.review
-    on: condition:no_active_bead_work
-    to: plan.done
-    actions: [set_plan_state:done, stop_daemon]
-`
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(defaultFlowTOML), 0o644)
 }
 
 func loadFlowSpec(projectRoot string) (FlowSpec, error) {
@@ -1173,136 +1613,22 @@ func loadFlowSpec(projectRoot string) (FlowSpec, error) {
 	if err != nil {
 		return FlowSpec{}, err
 	}
-	var flow FlowSpec
-	var section string
-	var curState *FlowState
-	var curTransition *FlowTransition
-	sc := bufio.NewScanner(bytes.NewReader(buf))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if line == "states:" {
-			section = "states"
-			curState = nil
-			curTransition = nil
-			continue
-		}
-		if line == "transitions:" {
-			section = "transitions"
-			curState = nil
-			curTransition = nil
-			continue
-		}
-		if strings.HasPrefix(line, "version:") {
-			flow.Version = atoiSafe(strings.TrimSpace(strings.TrimPrefix(line, "version:")))
-			continue
-		}
-		if strings.HasPrefix(line, "start:") {
-			flow.Start = strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "start:")), `"'`)
-			continue
-		}
-		if section == "states" {
-			if strings.HasPrefix(line, "- ") {
-				flow.States = append(flow.States, FlowState{})
-				curState = &flow.States[len(flow.States)-1]
-				curTransition = nil
-				line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
-			}
-			if curState != nil {
-				applyFlowStateKV(curState, line)
-			}
-			continue
-		}
-		if section == "transitions" {
-			if strings.HasPrefix(line, "- ") {
-				flow.Transitions = append(flow.Transitions, FlowTransition{})
-				curTransition = &flow.Transitions[len(flow.Transitions)-1]
-				curState = nil
-				line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
-			}
-			if curTransition != nil {
-				applyFlowTransitionKV(curTransition, line)
-			}
-		}
+	var doc struct {
+		Version     int              `toml:"version"`
+		Start       string           `toml:"start"`
+		States      []FlowState      `toml:"states"`
+		Transitions []FlowTransition `toml:"transitions"`
 	}
-	if err := sc.Err(); err != nil {
+	if err := toml.Unmarshal(buf, &doc); err != nil {
 		return FlowSpec{}, err
 	}
+	flow := FlowSpec{
+		Version:     doc.Version,
+		Start:       strings.TrimSpace(doc.Start),
+		States:      doc.States,
+		Transitions: doc.Transitions,
+	}
 	return flow, nil
-}
-
-func applyFlowStateKV(st *FlowState, line string) {
-	k, v, ok := splitYAMLKV(line)
-	if !ok {
-		return
-	}
-	switch k {
-	case "id":
-		st.ID = v
-	case "kind":
-		st.Kind = v
-	case "label":
-		st.Label = v
-	case "prompt":
-		st.Prompt = v
-	case "provider":
-		st.Provider = v
-	case "model":
-		st.Model = v
-	case "effort":
-		st.Effort = v
-	}
-}
-
-func applyFlowTransitionKV(tr *FlowTransition, line string) {
-	k, v, ok := splitYAMLKV(line)
-	if !ok {
-		return
-	}
-	switch k {
-	case "from":
-		tr.From = v
-	case "on":
-		tr.On = v
-	case "to":
-		tr.To = v
-	case "guard":
-		tr.Guard = v
-	case "actions":
-		tr.Actions = parseYAMLInlineArray(v)
-	}
-}
-
-func splitYAMLKV(line string) (string, string, bool) {
-	idx := strings.Index(line, ":")
-	if idx <= 0 {
-		return "", "", false
-	}
-	k := strings.TrimSpace(line[:idx])
-	v := strings.TrimSpace(line[idx+1:])
-	v = strings.Trim(v, `"'`)
-	return k, v, true
-}
-
-func parseYAMLInlineArray(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
-		raw = strings.TrimSpace(raw[1 : len(raw)-1])
-	}
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.Trim(strings.TrimSpace(p), `"'`)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func runTick(args []string) error {
@@ -1614,6 +1940,89 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		_ = saveCommitQueue(cfg.ProjectRoot, commitQ)
 	}
 
+	// Reap workers via lifecycle policy from flow.toml.
+	flow, _ := loadFlowSpec(cfg.ProjectRoot)
+	policies := flowLifecyclePolicies(flow)
+	reaped := false
+	for _, s := range statuses {
+		policy, hasPolicy := policies[s.Role]
+		idleAge := workerIdleAge(s)
+		stLower := strings.ToLower(strings.TrimSpace(s.State))
+
+		// Recycle old panes regardless of queue to avoid stale long-lived sessions.
+		if hasPolicy && policy.MaxLifetime > 0 && s.Duration > policy.MaxLifetime {
+			if strings.TrimSpace(s.BeadID) != "" {
+				if bead, ok := beadByID[s.BeadID]; ok {
+					_ = applyTransitionUpdate(cfg, bead, firstNeedsLabel(bead.Labels), false)
+				}
+			}
+			target := fmt.Sprintf("%s.%d", s.Session, s.Pane)
+			if _, err := runCommand("", "tmux", "kill-pane", "-t", target); err == nil {
+				reaped = true
+			}
+			continue
+		}
+
+		// Busy without progress watchdog: recycle and unassign so queue can continue.
+		if hasPolicy && strings.TrimSpace(s.BeadID) != "" && policy.MaxBusyWithoutProgress > 0 && idleAge > policy.MaxBusyWithoutProgress {
+			if bead, ok := beadByID[s.BeadID]; ok {
+				_ = applyTransitionUpdate(cfg, bead, firstNeedsLabel(bead.Labels), false)
+			}
+			target := fmt.Sprintf("%s.%d", s.Session, s.Pane)
+			if _, err := runCommand("", "tmux", "kill-pane", "-t", target); err == nil {
+				reaped = true
+			}
+			continue
+		}
+
+		// Idle/waiting ready panes may be retired even before queue-empty check.
+		if hasPolicy && strings.TrimSpace(s.BeadID) == "" && policy.MaxIdle > 0 &&
+			(stLower == "idle" || stLower == "waiting" || stLower == "ready") &&
+			idleAge > policy.MaxIdle {
+			target := fmt.Sprintf("%s.%d", s.Session, s.Pane)
+			if _, err := runCommand("", "tmux", "kill-pane", "-t", target); err == nil {
+				reaped = true
+			}
+			continue
+		}
+
+		// One-shot workers are retired immediately when unassigned and not busy.
+		if hasPolicy && policy.OneShot && strings.TrimSpace(s.BeadID) == "" && stLower != "busy" {
+			target := fmt.Sprintf("%s.%d", s.Session, s.Pane)
+			if _, err := runCommand("", "tmux", "kill-pane", "-t", target); err == nil {
+				reaped = true
+			}
+			continue
+		}
+
+		// Reap idle/waiting workers when their role has no queue work.
+		if strings.TrimSpace(s.BeadID) != "" {
+			continue
+		}
+		if stLower != "idle" && stLower != "waiting" && stLower != "ready" {
+			continue
+		}
+		noWork := false
+		if strings.EqualFold(strings.TrimSpace(s.Role), "committer") {
+			noWork = len(commitQ.Pending) == 0
+		} else if rc, ok := roleMap[s.Role]; ok {
+			noWork = len(queueByLabel[rc.Label]) == 0
+		}
+		if !noWork {
+			continue
+		}
+		target := fmt.Sprintf("%s.%d", s.Session, s.Pane)
+		if _, err := runCommand("", "tmux", "kill-pane", "-t", target); err == nil {
+			reaped = true
+		}
+	}
+	if reaped {
+		refreshed, err := collectStatuses(cfg, false)
+		if err == nil {
+			return refreshed, nil
+		}
+	}
+
 	return statuses, nil
 }
 
@@ -1847,6 +2256,9 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 		if rows[i].Session != rows[j].Session {
 			return rows[i].Session < rows[j].Session
 		}
+		if rows[i].Role != rows[j].Role {
+			return rows[i].Role < rows[j].Role
+		}
 		return rows[i].Pane < rows[j].Pane
 	})
 	return rows, nil
@@ -1902,11 +2314,14 @@ func ensureSessionAndPanes(cfg Config) error {
 		}
 	}
 
+	desiredByRole := desiredWorkersByRole(cfg)
+
 	for _, role := range cfg.Roles {
-		workers := max(1, role.Workers)
+		workers := desiredByRole[role.Name]
 		for idx := 1; idx <= workers; idx++ {
 			wid := workerID(cfg.Session, role.Name, idx)
 			if existing, ok := paneByTitle[wid]; ok {
+				applyPaneProfileStyle(cfg.Session, existing.PaneIndex, wid)
 				if shellCommands[strings.ToLower(existing.CurrentCommand)] {
 					maybeRegisterWorker(cfg, role, wid)
 					if err := launchWorker(cfg, role, wid, existing.PaneIndex); err != nil {
@@ -1931,15 +2346,158 @@ func ensureSessionAndPanes(cfg Config) error {
 			if err := setPaneTitle(cfg.Session, pane.PaneIndex, wid); err != nil {
 				return err
 			}
+			applyPaneProfileStyle(cfg.Session, pane.PaneIndex, wid)
 			maybeRegisterWorker(cfg, role, wid)
 			if err := launchWorker(cfg, role, wid, pane.PaneIndex); err != nil {
 				return err
+			}
+		}
+		// Scale-down: remove excess worker panes for this role when desired workers drop.
+		maxWorkers := max(1, role.Workers)
+		for idx := workers + 1; idx <= maxWorkers; idx++ {
+			wid := workerID(cfg.Session, role.Name, idx)
+			if p, ok := paneByTitle[wid]; ok {
+				_, _ = runCommand("", "tmux", "kill-pane", "-t", fmt.Sprintf("%s.%d", cfg.Session, p.PaneIndex))
 			}
 		}
 	}
 
 	_, err = runCommand("", "tmux", "select-layout", "-t", cfg.Session, "tiled")
 	return err
+}
+
+func desiredWorkersByRole(cfg Config) map[string]int {
+	desired := map[string]int{}
+	for _, r := range cfg.Roles {
+		desired[r.Name] = max(1, r.Workers)
+	}
+
+	beads, err := listBeads(cfg.ProjectRoot)
+	if err != nil {
+		return desired
+	}
+	queue := buildQueueByLabel(beads)
+	assignedByRole := map[string]int{}
+	for _, b := range beads {
+		if wr, ok := parseWorkerTitle(strings.TrimSpace(b.Assignee)); ok {
+			assignedByRole[wr.Role]++
+		}
+	}
+	commitQ, _ := loadCommitQueue(cfg.ProjectRoot)
+
+	flow, _ := loadFlowSpec(cfg.ProjectRoot)
+	workersFromFlow := flowWorkersByRole(flow)
+	for role, n := range workersFromFlow {
+		if n > 0 {
+			desired[role] = n
+		}
+	}
+
+	for _, role := range cfg.Roles {
+		hasWork := false
+		switch strings.ToLower(strings.TrimSpace(role.Name)) {
+		case "committer":
+			hasWork = len(commitQ.Pending) > 0
+		default:
+			hasWork = len(queue[role.Label]) > 0
+		}
+		if !hasWork && assignedByRole[role.Name] == 0 {
+			desired[role.Name] = 0
+		}
+	}
+	return desired
+}
+
+func flowWorkersByRole(flow FlowSpec) map[string]int {
+	out := map[string]int{}
+	for _, st := range flow.States {
+		role := flowRoleFromState(st)
+		if role == "" || st.Workers <= 0 {
+			continue
+		}
+		out[role] = st.Workers
+	}
+	return out
+}
+
+func flowLifecyclePolicies(flow FlowSpec) map[string]WorkerLifecyclePolicy {
+	out := map[string]WorkerLifecyclePolicy{}
+	for _, st := range flow.States {
+		role := flowRoleFromState(st)
+		if role == "" {
+			continue
+		}
+		p := WorkerLifecyclePolicy{
+			Workers:                st.Workers,
+			MaxIdle:                parseDurationish(st.MaxIdle),
+			MaxLifetime:            parseDurationish(st.MaxLifetime),
+			MaxBusyWithoutProgress: parseDurationish(st.MaxBusyWithoutProgress),
+			Respawn:                parseBoolish(st.Respawn),
+			OneShot:                parseBoolish(st.OneShot),
+		}
+		out[role] = p
+	}
+	return out
+}
+
+func parseDurationish(raw string) time.Duration {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+func parseBoolish(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func workerIdleAge(s WorkerStatus) time.Duration {
+	a := s.ActivityAge
+	t := s.TranscriptAge
+	if a <= 0 {
+		return t
+	}
+	if t <= 0 {
+		return a
+	}
+	if a < t {
+		return a
+	}
+	return t
+}
+
+func flowRoleFromState(st FlowState) string {
+	lbl := strings.TrimSpace(st.Label)
+	id := strings.ToLower(strings.TrimSpace(st.ID))
+	switch lbl {
+	case "needs-impl":
+		return "implement"
+	case "needs-proof":
+		return "proof"
+	case "needs-review":
+		return "review"
+	case "commit-queue":
+		return "committer"
+	case "plan-review":
+		return "plan-review"
+	}
+	if strings.Contains(id, "committer") {
+		return "committer"
+	}
+	if id == "plan.review" {
+		return "plan-review"
+	}
+	return ""
 }
 
 func maybeRegisterWorker(cfg Config, role RoleConfig, workerID string) {
@@ -2049,6 +2607,166 @@ func deterministicAgentName(workerID string) string {
 	a := int(h[0]) % len(adjs)
 	n := int(h[1]) % len(nouns)
 	return adjs[a] + nouns[n]
+}
+
+type profileTheme struct {
+	RowBG  lipgloss.Color
+	RowFG  lipgloss.Color
+	TmuxBG string
+	TmuxFG string
+}
+
+func roleThemeFor(role string) profileTheme {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "implement":
+		return profileTheme{RowBG: lipgloss.Color("#1e3a8a"), RowFG: lipgloss.Color("#f8fbff"), TmuxBG: "colour33", TmuxFG: "colour255"}
+	case "proof":
+		return profileTheme{RowBG: lipgloss.Color("#92400e"), RowFG: lipgloss.Color("#fff8f2"), TmuxBG: "colour94", TmuxFG: "colour255"}
+	case "review":
+		return profileTheme{RowBG: lipgloss.Color("#166534"), RowFG: lipgloss.Color("#f3fff7"), TmuxBG: "colour28", TmuxFG: "colour255"}
+	case "committer":
+		return profileTheme{RowBG: lipgloss.Color("#6d28d9"), RowFG: lipgloss.Color("#f8f3ff"), TmuxBG: "colour56", TmuxFG: "colour255"}
+	case "plan-review":
+		return profileTheme{RowBG: lipgloss.Color("#b91c1c"), RowFG: lipgloss.Color("#fff5f5"), TmuxBG: "colour160", TmuxFG: "colour255"}
+	default:
+		return profileTheme{RowBG: lipgloss.Color("236"), RowFG: lipgloss.Color("252"), TmuxBG: "colour236", TmuxFG: "colour252"}
+	}
+}
+
+func applyPaneProfileStyle(session string, pane int, workerID string) {
+	role := ""
+	if wr, ok := parseWorkerTitle(workerID); ok {
+		role = wr.Role
+	}
+	theme := roleThemeFor(role)
+	target := fmt.Sprintf("%s.%d", session, pane)
+	style := fmt.Sprintf("bg=%s,fg=%s", theme.TmuxBG, theme.TmuxFG)
+	_, _ = runCommand("", "tmux", "select-pane", "-t", target, "-P", style)
+}
+
+func renderRoleLegendLine() string {
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	items := []struct {
+		role string
+	}{
+		{role: "implement"},
+		{role: "proof"},
+		{role: "review"},
+		{role: "committer"},
+		{role: "plan-review"},
+	}
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		t := roleThemeFor(it.role)
+		pill := lipgloss.NewStyle().Background(t.RowBG).Foreground(t.RowFG).Render("  ")
+		parts = append(parts, pill+muted.Render(" "+it.role))
+	}
+	return muted.Render("legend: " + strings.Join(parts, "  "))
+}
+
+func renderKeysLine(width int, keys string) string {
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	line := "keys: " + strings.TrimSpace(keys)
+	return muted.Render(reduce(line, max(20, width-2)))
+}
+
+func renderTickLogBlock(width int, headerWidth int, lines []string, logHeight int) string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("tick log (latest)") + "\n")
+	ruleW := min(max(20, headerWidth), max(20, width-1))
+	b.WriteString(mutedStyle.Render(strings.Repeat("-", ruleW)) + "\n")
+	logLines := lastNLogLines(lines, max(1, logHeight))
+	if len(logLines) == 0 {
+		b.WriteString(mutedStyle.Render("(no tick entries yet)") + "\n")
+		return b.String()
+	}
+	for _, line := range logLines {
+		b.WriteString(mutedStyle.Render(reduce(line, max(20, width-2))) + "\n")
+	}
+	return b.String()
+}
+
+func inferPlanState(meta SwarmMeta, flow WorkflowStageCounts, rows []WorkerStatus) string {
+	if strings.TrimSpace(meta.PlanFile) == "" {
+		return "none"
+	}
+	if (flow.QueueImpl + flow.QueueProof + flow.QueueReview + flow.InImplementation + flow.InProof + flow.InReview) > 0 {
+		return "executing"
+	}
+	for _, r := range rows {
+		if !strings.EqualFold(strings.TrimSpace(r.Role), "plan-review") {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(r.State)) {
+		case "busy", "assigned", "waiting", "ready":
+			return "plan-review"
+		}
+	}
+	return "done"
+}
+
+func renderSystemStatusBlock(width int, flow WorkflowStageCounts, lifecycle LifecycleCounts, counts map[string]int, total int, meta SwarmMeta, rows []WorkerStatus) []string {
+	out := []string{"system status"}
+	planFile := strings.TrimSpace(meta.PlanFile)
+	if planFile == "" {
+		out = append(out, reduce("plan: none", max(20, width-2)))
+	} else {
+		out = append(out, reduce("plan: "+planFile, max(20, width-2)))
+	}
+	if len(meta.Topics) == 0 {
+		out = append(out, reduce("topics: none", max(20, width-2)))
+	} else {
+		out = append(out, reduce("topics: "+strings.Join(meta.Topics, ", "), max(20, width-2)))
+	}
+	out = append(out, reduce("plan_state: "+inferPlanState(meta, flow, rows), max(20, width-2)))
+	out = append(out, renderOverviewLines(counts, total, flow, lifecycle, width)...)
+	return out
+}
+
+func sectionRule(width int) string {
+	return strings.Repeat("-", min(70, max(20, width-1)))
+}
+
+func renderTabStrip(active int) string {
+	tabs := []string{"sessions", "beads"}
+	parts := make([]string, 0, len(tabs))
+	on := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Render
+	off := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render
+	for i, t := range tabs {
+		label := t
+		if i == active {
+			label = "[" + t + "]"
+		}
+		if i == active {
+			parts = append(parts, on(" "+label+" "))
+		} else {
+			parts = append(parts, off(" "+label+" "))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func renderOverviewLines(counts map[string]int, total int, flow WorkflowStageCounts, lifecycle LifecycleCounts, width int) []string {
+	lines := make([]string, 0, 3)
+	if counts == nil {
+		counts = map[string]int{}
+	}
+	closed := counts["closed"]
+	tomb := counts["tombstone"]
+	active := total - closed - tomb
+	if active < 0 {
+		active = 0
+	}
+	_ = lifecycle
+	lines = append(lines, reduce(fmt.Sprintf("beads: total=%d active=%d open=%d in_progress=%d deferred=%d closed=%d tomb=%d",
+		total, active, counts["open"], counts["in_progress"], counts["deferred"], closed, tomb), max(20, width-2)))
+	lines = append(lines, reduce(fmt.Sprintf("queues: impl=%d proof=%d review=%d | stages impl=%d proof=%d review=%d",
+		flow.QueueImpl, flow.QueueProof, flow.QueueReview, flow.InImplementation, flow.InProof, flow.InReview), max(20, width-2)))
+	lines = append(lines, reduce(fmt.Sprintf("assigned: impl=%d proof=%d review=%d other=%d unassigned=%d",
+		flow.AssignedImpl, flow.AssignedProof, flow.AssignedReview, flow.AssignedOther, flow.Unassigned), max(20, width-2)))
+	return lines
 }
 
 func providerProgram(provider string) string {
@@ -3171,6 +3889,7 @@ func listLifecycleBeadRows(projectRoot string) ([]LifecycleBeadRow, error) {
 	}
 	type rawIssue struct {
 		ID       string       `json:"id"`
+		Title    string       `json:"title"`
 		Status   string       `json:"status"`
 		Labels   []string     `json:"labels"`
 		Assignee string       `json:"assignee"`
@@ -3200,16 +3919,34 @@ func listLifecycleBeadRows(projectRoot string) ([]LifecycleBeadRow, error) {
 
 	rows := make([]LifecycleBeadRow, 0, len(latest))
 	for _, issue := range latest {
-		if issue.Status != "open" && issue.Status != "in_progress" {
-			continue
-		}
 		row := LifecycleBeadRow{
 			ID:       issue.ID,
+			Title:    strings.TrimSpace(issue.Title),
 			Stage:    lifecycleStage(firstNeedsLabel(issue.Labels)),
 			Status:   blankDash(issue.Status),
 			Assignee: blankDash(strings.TrimSpace(issue.Assignee)),
 		}
-		for _, c := range issue.Comments {
+		comments := append([]rawComment(nil), issue.Comments...)
+		sort.SliceStable(comments, func(i, j int) bool {
+			ti := parseMaybeRFC3339(comments[i].CreatedAt)
+			tj := parseMaybeRFC3339(comments[j].CreatedAt)
+			if ti.IsZero() && tj.IsZero() {
+				return i < j
+			}
+			if ti.IsZero() {
+				return false
+			}
+			if tj.IsZero() {
+				return true
+			}
+			return ti.Before(tj)
+		})
+		commentTexts := make([]string, 0, len(issue.Comments))
+		for _, c := range comments {
+			commentTexts = append(commentTexts, c.Text)
+		}
+		row.Timeline = buildBeadTimeline(issue.Status, commentTexts)
+		for _, c := range comments {
 			t := strings.ToLower(c.Text)
 			row.ImplDone += strings.Count(t, "state: impl:done")
 			row.ProofFailed += strings.Count(t, "state: proof:failed")
@@ -3248,22 +3985,99 @@ func listLifecycleBeadRows(projectRoot string) ([]LifecycleBeadRow, error) {
 			row.LastState = "-"
 			row.HistoryPreview = "-"
 		}
+		row.Current = lifecycleCurrentKey(row)
 		rows = append(rows, row)
 	}
 
-	stageRank := map[string]int{"impl": 0, "proof": 1, "review": 2, "-": 3}
+	currentRank := map[string]int{
+		"open":        0,
+		"implement":   1,
+		"proof":       2,
+		"review":      3,
+		"closed":      4,
+		"tombstone":   5,
+		"deferred":    5,
+		"in_progress": 6,
+		"-":           7,
+	}
 	sort.Slice(rows, func(i, j int) bool {
-		ri := stageRank[rows[i].Stage]
-		rj := stageRank[rows[j].Stage]
+		ri := currentRank[rows[i].Current]
+		rj := currentRank[rows[j].Current]
 		if ri != rj {
 			return ri < rj
 		}
-		if rows[i].Status != rows[j].Status {
-			return rows[i].Status < rows[j].Status
+		if rows[i].Stage != rows[j].Stage {
+			return rows[i].Stage < rows[j].Stage
 		}
 		return rows[i].ID < rows[j].ID
 	})
 	return rows, nil
+}
+
+func parseMaybeRFC3339(v string) time.Time {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, v); err == nil {
+		return ts
+	}
+	if ts, err := time.Parse(time.RFC3339, v); err == nil {
+		return ts
+	}
+	return time.Time{}
+}
+
+func lifecycleCurrentKey(row LifecycleBeadRow) string {
+	s := strings.ToLower(strings.TrimSpace(row.Status))
+	if s == "closed" {
+		return "closed"
+	}
+	switch strings.TrimSpace(row.Stage) {
+	case "impl":
+		return "implement"
+	case "proof":
+		return "proof"
+	case "review":
+		return "review"
+	}
+	if s == "open" {
+		return "open"
+	}
+	if s == "deferred" {
+		return "deferred"
+	}
+	if s == "tombstone" {
+		return "tombstone"
+	}
+	if s == "in_progress" {
+		return "in_progress"
+	}
+	return "-"
+}
+
+func buildBeadTimeline(status string, commentTexts []string) []string {
+	out := []string{"open"}
+	for _, txt := range commentTexts {
+		lc := strings.ToLower(txt)
+		for _, line := range strings.Split(lc, "\n") {
+			t := strings.TrimSpace(line)
+			switch {
+			case strings.Contains(t, "state: impl:done"):
+				out = append(out, "implement")
+			case strings.Contains(t, "state: proof:passed"), strings.Contains(t, "state: proof:failed"):
+				out = append(out, "proof")
+			case strings.Contains(t, "state: review:passed"), strings.Contains(t, "state: review:failed"):
+				out = append(out, "review")
+			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(status), "closed") {
+		out = append(out, "closed")
+	} else if strings.EqualFold(strings.TrimSpace(status), "tombstone") {
+		out = append(out, "tombstone")
+	}
+	return out
 }
 
 func lifecycleStage(needs string) string {
@@ -3277,6 +4091,60 @@ func lifecycleStage(needs string) string {
 	default:
 		return "-"
 	}
+}
+
+func timelineSquareColor(key string) lipgloss.Color {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "open":
+		return lipgloss.Color("#6b7280")
+	case "implement":
+		return roleThemeFor("implement").RowBG
+	case "proof":
+		return roleThemeFor("proof").RowBG
+	case "review":
+		return roleThemeFor("review").RowBG
+	case "closed":
+		// Reserved neon green for closed (intentionally distinct from role colors).
+		return lipgloss.Color("#a3e635")
+	case "tombstone":
+		return lipgloss.Color("#111827")
+	default:
+		return lipgloss.Color("#9ca3af")
+	}
+}
+
+func renderBeadTimelineSquares(events []string) string {
+	if len(events) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(events))
+	for _, e := range events {
+		parts = append(parts, lipgloss.NewStyle().Foreground(timelineSquareColor(e)).Render("■"))
+	}
+	return strings.Join(parts, "")
+}
+
+func renderBeadTimelineCell(events []string, width int) string {
+	if width < 1 {
+		width = 1
+	}
+	s := renderBeadTimelineSquares(events)
+	n := len(events)
+	if n < width {
+		s += strings.Repeat(" ", width-n)
+	}
+	return s
+}
+
+func renderTimelineLegendLine() string {
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	keys := []string{"open", "implement", "proof", "review", "closed", "tombstone"}
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		sq := lipgloss.NewStyle().Foreground(timelineSquareColor(k)).Render("■")
+		parts = append(parts, sq+muted.Render(k))
+	}
+	return muted.Render("timeline: ") + strings.Join(parts, muted.Render("  "))
 }
 
 func runCommand(cwd, name string, args ...string) (string, error) {
@@ -3349,7 +4217,7 @@ func loadConfig(path string) (Config, error) {
 			Provider:       "cc",
 			Model:          "opus",
 			Effort:         "medium",
-			PromptFile:     filepath.Join(cfg.ProjectRoot, "docs", "workflow", "prompts", "imple_commiter.md"),
+			PromptFile:     filepath.Join(cfg.ProjectRoot, ".bsw", "prompts", "impl_committer.md"),
 			LaunchCommand:  "",
 			TranscriptGlob: "~/.claude/projects/*/*.jsonl",
 		})
@@ -3364,7 +4232,7 @@ func loadConfig(path string) (Config, error) {
 		cfg.PlanReview.Effort = "high"
 	}
 	if strings.TrimSpace(cfg.PlanReview.PromptFile) == "" {
-		cfg.PlanReview.PromptFile = filepath.Join(cfg.ProjectRoot, "docs", "workflow", "prompts", "plan_reviewer.md")
+		cfg.PlanReview.PromptFile = filepath.Join(cfg.ProjectRoot, ".bsw", "prompts", "plan_reviewer.md")
 	}
 	// Backward-compatible default: enable plan reviewer when legacy config omitted the field.
 	if !planReviewEnabledExplicit {
@@ -4788,6 +5656,9 @@ type dataMsg struct {
 	BeadTotal      int
 	WorkflowStages WorkflowStageCounts
 	Lifecycle      LifecycleCounts
+	PlanMeta       SwarmMeta
+	FlowSpec       FlowSpec
+	FlowCurrent    string
 	Err            error
 }
 
@@ -4801,7 +5672,11 @@ type tuiModel struct {
 	beadTotal       int
 	flowStages      WorkflowStageCounts
 	lifecycle       LifecycleCounts
+	planMeta        SwarmMeta
+	flowSpec        FlowSpec
+	flowCurrent     string
 	tickLog         []string
+	showTickLog     bool
 	cursor          int
 	lifecycleCursor int
 	expandedHistory map[string]bool
@@ -4821,6 +5696,7 @@ func newTUIModel(cfg Config, refresh time.Duration) tuiModel {
 		lifecycleRows:   []LifecycleBeadRow{},
 		beadCounts:      map[string]int{},
 		tickLog:         []string{},
+		showTickLog:     true,
 		expandedHistory: map[string]bool{},
 	}
 }
@@ -4844,7 +5720,21 @@ func (m tuiModel) fetchCmd() tea.Cmd {
 		counts, total, _ := listBeadStatusCounts(m.cfg.ProjectRoot)
 		flow, _ := listWorkflowStageCounts(m.cfg.ProjectRoot)
 		lifecycle, _ := lifecycleCountsFromJSONL(m.cfg.ProjectRoot)
-		return dataMsg{Rows: rows, LifecycleRows: lifecycleRows, BeadCounts: counts, BeadTotal: total, WorkflowStages: flow, Lifecycle: lifecycle, Err: nil}
+		meta, _ := loadSwarmMeta(m.cfg.ProjectRoot)
+		flowSpec, _ := loadFlowSpec(m.cfg.ProjectRoot)
+		flowCurrent := inferCurrentFlowNode(flowSpec, flow, rows)
+		return dataMsg{
+			Rows:           rows,
+			LifecycleRows:  lifecycleRows,
+			BeadCounts:     counts,
+			BeadTotal:      total,
+			WorkflowStages: flow,
+			Lifecycle:      lifecycle,
+			PlanMeta:       meta,
+			FlowSpec:       flowSpec,
+			FlowCurrent:    flowCurrent,
+			Err:            nil,
+		}
 	}
 }
 
@@ -4856,12 +5746,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "r":
 			return m, m.fetchCmd()
+		case "t":
+			m.showTickLog = !m.showTickLog
 		case "tab":
-			if m.tab == 0 {
-				m.tab = 1
-			} else {
-				m.tab = 0
-			}
+			m.tab = (m.tab + 1) % 2
 		case "up", "k":
 			if m.tab == 0 {
 				if m.cursor > 0 {
@@ -4919,6 +5807,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.beadTotal = msg.BeadTotal
 			m.flowStages = msg.WorkflowStages
 			m.lifecycle = msg.Lifecycle
+			m.planMeta = msg.PlanMeta
+			m.flowSpec = msg.FlowSpec
+			m.flowCurrent = msg.FlowCurrent
 			if m.cursor >= len(m.rows) {
 				m.cursor = max(0, len(m.rows)-1)
 			}
@@ -4939,9 +5830,7 @@ func (m tuiModel) View() string {
 }
 
 func (m tuiModel) viewSessions() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	selectedStyle := lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
 	width := m.width
@@ -4955,24 +5844,22 @@ func (m tuiModel) viewSessions() string {
 	cols := fitTUIColumns(width)
 	// Keep tick log compact so worker table remains primary on regular terminal heights.
 	logHeight := clamp(max(3, height/5), 3, 8)
+	if !m.showTickLog {
+		logHeight = 0
+	}
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("bsw sessions") + "\n")
-	b.WriteString(mutedStyle.Render("tab: [sessions] lifecycle") + "\n")
+	b.WriteString(renderTabStrip(0) + "\n")
 
 	if m.err != nil {
 		b.WriteString(mutedStyle.Render("error: "+m.err.Error()) + "\n")
 	}
-	if statusLine := formatBeadStatusLine(m.beadCounts, m.beadTotal); statusLine != "" {
-		b.WriteString(mutedStyle.Render(reduce(statusLine, max(30, width-2))) + "\n")
+	statusLines := renderSystemStatusBlock(width, m.flowStages, m.lifecycle, m.beadCounts, m.beadTotal, m.planMeta, m.rows)
+	b.WriteString(headerStyle.Render(statusLines[0]) + "\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("-", min(70, max(20, width-1)))) + "\n")
+	for _, ln := range statusLines[1:] {
+		b.WriteString(mutedStyle.Render(ln) + "\n")
 	}
-	if detailLine := formatBeadStatusDetailLine(m.beadCounts); detailLine != "" {
-		b.WriteString(mutedStyle.Render(reduce(detailLine, max(30, width-2))) + "\n")
-	}
-	b.WriteString(mutedStyle.Render(reduce(formatWorkflowNeedLine(m.flowStages), max(30, width-2))) + "\n")
-	b.WriteString(mutedStyle.Render(reduce(formatWorkflowAssignedLine(m.flowStages), max(30, width-2))) + "\n")
-	b.WriteString(mutedStyle.Render(reduce(formatLifecycleLine1(m.lifecycle), max(30, width-2))) + "\n")
-	b.WriteString(mutedStyle.Render(reduce(formatLifecycleLine2(m.lifecycle), max(30, width-2))) + "\n")
 
 	header := strings.Join([]string{
 		padCell("SESSION", cols.Session),
@@ -4991,8 +5878,8 @@ func (m tuiModel) viewSessions() string {
 	b.WriteString(mutedStyle.Render(strings.Repeat("-", visibleLen(header))) + "\n")
 
 	// Reserve space for fixed tick log section at bottom.
-	staticTop := 2 + 6 + 2 // title+tab + summary lines + table header+rule
-	footerLines := 2       // updated + keys
+	staticTop := 2 + len(statusLines) + 3 // title+tab + status header/rule/lines + table header+rule
+	footerLines := 2
 	maxRows := height - staticTop - logHeight - footerLines
 	if maxRows < 1 {
 		maxRows = 1
@@ -5032,12 +5919,9 @@ func (m tuiModel) viewSessions() string {
 				padCell(shortDur(r.Duration), cols.Duration),
 				padCell(r.Activity, cols.Activity),
 			}, " ")
-			line = prefix + line
-			if i == m.cursor {
-				b.WriteString(selectedStyle.Render(line) + "\n")
-			} else {
-				b.WriteString(line + "\n")
-			}
+			rowTheme := roleThemeFor(r.Role)
+			square := lipgloss.NewStyle().Foreground(rowTheme.RowBG).Render("■")
+			b.WriteString(prefix + square + " " + line + "\n")
 		}
 		if end < len(m.rows) {
 			b.WriteString(mutedStyle.Render(fmt.Sprintf("... +%d more rows (use j/k)", len(m.rows)-end)) + "\n")
@@ -5045,27 +5929,20 @@ func (m tuiModel) viewSessions() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(headerStyle.Render("tick log (latest)") + "\n")
-	b.WriteString(mutedStyle.Render(strings.Repeat("-", min(visibleLen(header), width-1))) + "\n")
-	logLines := lastNLogLines(m.tickLog, logHeight-2)
-	if len(logLines) == 0 {
-		b.WriteString(mutedStyle.Render("(no tick entries yet)") + "\n")
-	} else {
-		for _, line := range logLines {
-			b.WriteString(mutedStyle.Render(reduce(line, max(20, width-2))) + "\n")
-		}
+	b.WriteString(renderRoleLegendLine() + "\n")
+	b.WriteString(renderKeysLine(width, "tab switch view, up/down (j/k) move, Enter/z zoom, r refresh, t toggle-log, q quit") + "\n")
+	if m.showTickLog {
+		b.WriteString("\n")
+		b.WriteString(renderTickLogBlock(width, visibleLen(header), m.tickLog, logHeight-2))
 	}
 	if !m.lastUpdated.IsZero() {
 		b.WriteString("\n" + mutedStyle.Render("updated: "+m.lastUpdated.Format("15:04:05")) + "\n")
 	}
-	b.WriteString(mutedStyle.Render("\nkeys: tab switch view, up/down (j/k) move, Enter/z zoom, r refresh, q quit"))
 	return b.String()
 }
 
 func (m tuiModel) viewLifecycle() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	selectedStyle := lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
 	width := m.width
@@ -5076,31 +5953,39 @@ func (m tuiModel) viewLifecycle() string {
 	if height <= 0 {
 		height = 40
 	}
+	logHeight := clamp(max(3, height/6), 3, 8)
+	if !m.showTickLog {
+		logHeight = 0
+	}
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("bsw lifecycle") + "\n")
-	b.WriteString(mutedStyle.Render("tab: sessions [lifecycle]") + "\n")
+	b.WriteString(renderTabStrip(1) + "\n")
 	if m.err != nil {
 		b.WriteString(mutedStyle.Render("error: "+m.err.Error()) + "\n")
 	}
-	if statusLine := formatBeadStatusLine(m.beadCounts, m.beadTotal); statusLine != "" {
-		b.WriteString(mutedStyle.Render(reduce(statusLine, max(30, width-2))) + "\n")
+	statusLines := renderSystemStatusBlock(width, m.flowStages, m.lifecycle, m.beadCounts, m.beadTotal, m.planMeta, m.rows)
+	b.WriteString(headerStyle.Render(statusLines[0]) + "\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("-", min(70, max(20, width-1)))) + "\n")
+	for _, ln := range statusLines[1:] {
+		b.WriteString(mutedStyle.Render(ln) + "\n")
 	}
-	if detailLine := formatBeadStatusDetailLine(m.beadCounts); detailLine != "" {
-		b.WriteString(mutedStyle.Render(reduce(detailLine, max(30, width-2))) + "\n")
-	}
-	b.WriteString(mutedStyle.Render(reduce(formatWorkflowNeedLine(m.flowStages), max(30, width-2))) + "\n")
-	b.WriteString(mutedStyle.Render(reduce(formatWorkflowAssignedLine(m.flowStages), max(30, width-2))) + "\n")
-	b.WriteString(mutedStyle.Render(reduce(formatLifecycleLine1(m.lifecycle), max(30, width-2))) + "\n")
-	b.WriteString(mutedStyle.Render(reduce(formatLifecycleLine2(m.lifecycle), max(30, width-2))) + "\n")
 
-	header := "BEAD         STAGE  STATUS       ASSIGNEE                    I  PF PP RF RP LAST_STATE"
+	tlWidth := 2
+	for _, r := range m.lifecycleRows {
+		if n := len(r.Timeline); n > tlWidth {
+			tlWidth = n
+		}
+	}
+	if tlWidth > 24 {
+		tlWidth = 24
+	}
+	header := fmt.Sprintf("%-*s BEAD         STAGE  STATUS       CNT         LAST_STATE         ASSIGNEE", tlWidth, "TL")
 	b.WriteString(headerStyle.Render(reduce(header, max(20, width-1))) + "\n")
 	b.WriteString(mutedStyle.Render(strings.Repeat("-", min(visibleLen(header), width-1))) + "\n")
 
-	staticTop := 2 + 6 + 2
+	staticTop := 2 + len(statusLines) + 3
 	footerLines := 2
-	maxRows := height - staticTop - footerLines
+	maxRows := height - staticTop - footerLines - logHeight - 3
 	if maxRows < 1 {
 		maxRows = 1
 	}
@@ -5122,15 +6007,17 @@ func (m tuiModel) viewLifecycle() string {
 			if i == m.lifecycleCursor {
 				prefix = "> "
 			}
-			line := fmt.Sprintf("%-12s %-6s %-12s %-27s %2d %2d %2d %2d %2d %s",
-				r.ID, r.Stage, r.Status, reduce(r.Assignee, 27), r.ImplDone, r.ProofFailed, r.ProofPassed, r.ReviewFailed, r.ReviewPassed, reduce(r.HistoryPreview, 60))
-			line = prefix + reduce(line, max(20, width-2))
-			if i == m.lifecycleCursor {
-				b.WriteString(selectedStyle.Render(line) + "\n")
-			} else {
-				b.WriteString(line + "\n")
-			}
+			cnt := fmt.Sprintf("%d/%d/%d/%d/%d", r.ImplDone, r.ProofFailed, r.ProofPassed, r.ReviewFailed, r.ReviewPassed)
+			line := fmt.Sprintf("%s %-12s %-6s %-12s %-11s %-18s %-24s",
+				renderBeadTimelineCell(r.Timeline, tlWidth), r.ID, r.Stage, r.Status, cnt, reduce(r.HistoryPreview, 18), reduce(r.Assignee, 24))
+			line = prefix + line
+			b.WriteString(line + "\n")
 			if m.expandedHistory[r.ID] {
+				title := strings.TrimSpace(r.Title)
+				if title == "" {
+					title = "-"
+				}
+				b.WriteString(mutedStyle.Render("    title: "+reduce(title, max(20, width-8))) + "\n")
 				if len(r.History) == 0 {
 					b.WriteString(mutedStyle.Render("    (no STATE history)") + "\n")
 				} else {
@@ -5140,11 +6027,135 @@ func (m tuiModel) viewLifecycle() string {
 				}
 			}
 		}
+		if end < len(m.lifecycleRows) {
+			b.WriteString(mutedStyle.Render(fmt.Sprintf("... +%d more beads (use j/k)", len(m.lifecycleRows)-end)) + "\n")
+		}
+	}
+	b.WriteString("\n")
+	legend := "legend: I=impl_done PF=proof_failed PP=proof_passed RF=review_failed RP=review_passed"
+	b.WriteString(mutedStyle.Render(reduce(legend, max(20, width-1))) + "\n")
+	b.WriteString(renderTimelineLegendLine() + "\n")
+	b.WriteString(renderKeysLine(width, "tab switch view, up/down (j/k) move, Enter toggle history, r refresh, t toggle-log, q quit") + "\n")
+	if m.showTickLog {
+		b.WriteString("\n")
+		b.WriteString(renderTickLogBlock(width, visibleLen(header), m.tickLog, logHeight))
 	}
 	if !m.lastUpdated.IsZero() {
 		b.WriteString("\n" + mutedStyle.Render("updated: "+m.lastUpdated.Format("15:04:05")) + "\n")
 	}
-	b.WriteString(mutedStyle.Render("\nkeys: tab switch view, up/down (j/k) move, Enter toggle history, r refresh, q quit"))
+	return b.String()
+}
+
+func (m tuiModel) viewPlan() string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	width := m.width
+	if width <= 0 {
+		width = 140
+	}
+	var b strings.Builder
+	b.WriteString(renderTabStrip(2) + "\n")
+	if m.err != nil {
+		b.WriteString(mutedStyle.Render("error: "+m.err.Error()) + "\n")
+	}
+	statusLines := renderSystemStatusBlock(width, m.flowStages, m.lifecycle, m.beadCounts, m.beadTotal, m.planMeta, m.rows)
+	b.WriteString(headerStyle.Render(statusLines[0]) + "\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("-", min(70, max(20, width-1)))) + "\n")
+	for _, ln := range statusLines[1:] {
+		b.WriteString(mutedStyle.Render(ln) + "\n")
+	}
+	planFile := strings.TrimSpace(m.planMeta.PlanFile)
+	if planFile == "" {
+		planFile = "-"
+	}
+	b.WriteString(headerStyle.Render("plan file: ") + reduce(planFile, max(20, width-12)) + "\n")
+	if len(m.planMeta.Topics) > 0 {
+		b.WriteString(headerStyle.Render("topics: ") + reduce(strings.Join(m.planMeta.Topics, ", "), max(20, width-10)) + "\n")
+	} else {
+		b.WriteString(headerStyle.Render("topics: ") + "-\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(renderRoleLegendLine() + "\n")
+	b.WriteString(renderKeysLine(width, "tab switch view, r refresh, t toggle-log, q quit") + "\n")
+	var planRow *WorkerStatus
+	for i := range m.rows {
+		if strings.EqualFold(m.rows[i].Role, "plan-review") {
+			planRow = &m.rows[i]
+			break
+		}
+	}
+	b.WriteString("\n" + headerStyle.Render("plan reviewer") + "\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("-", min(60, max(20, width-1)))) + "\n")
+	if planRow == nil {
+		b.WriteString(mutedStyle.Render("no plan-review pane") + "\n")
+	} else {
+		t := roleThemeFor(planRow.Role)
+		rowStyle := lipgloss.NewStyle().Background(t.RowBG).Foreground(t.RowFG)
+		line := fmt.Sprintf("pane=%d agent=%s state=%s provider=%s model=%s effort=%s activity=%s",
+			planRow.Pane, planRow.AgentName, planRow.State, planRow.Provider, blankDash(planRow.Model), blankDash(planRow.Effort), blankDash(planRow.Activity))
+		b.WriteString(rowStyle.Render(reduce(line, max(20, width-2))) + "\n")
+	}
+	if m.showTickLog {
+		b.WriteString("\n")
+		b.WriteString(renderTickLogBlock(width, 60, m.tickLog, 5))
+	}
+	if !m.lastUpdated.IsZero() {
+		b.WriteString("\n" + mutedStyle.Render("updated: "+m.lastUpdated.Format("15:04:05")) + "\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) viewFlow() string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
+	width := m.width
+	if width <= 0 {
+		width = 140
+	}
+	var b strings.Builder
+	b.WriteString(renderTabStrip(3) + "\n")
+	if m.err != nil {
+		b.WriteString(mutedStyle.Render("error: "+m.err.Error()) + "\n")
+	}
+	statusLines := renderSystemStatusBlock(width, m.flowStages, m.lifecycle, m.beadCounts, m.beadTotal, m.planMeta, m.rows)
+	b.WriteString(headerStyle.Render(statusLines[0]) + "\n")
+	b.WriteString(mutedStyle.Render(sectionRule(width)) + "\n")
+	for _, ln := range statusLines[1:] {
+		b.WriteString(mutedStyle.Render(ln) + "\n")
+	}
+	b.WriteString(mutedStyle.Render(sectionRule(width)) + "\n")
+
+	current := strings.TrimSpace(m.flowCurrent)
+	if current == "" {
+		current = "-"
+	}
+	start := strings.TrimSpace(m.flowSpec.Start)
+	if start == "" {
+		start = "-"
+	}
+	b.WriteString(headerStyle.Render("start: ") + start + "\n")
+	if current != "-" {
+		b.WriteString(activeStyle.Render(" current: "+current+" ") + "\n")
+	} else {
+		b.WriteString(headerStyle.Render("current: ") + "-\n")
+	}
+
+	b.WriteString("\n" + headerStyle.Render("state machine") + "\n")
+	b.WriteString(mutedStyle.Render(sectionRule(width)) + "\n")
+	for _, line := range renderFlowDAGLines(m.flowSpec, m.flowCurrent, width) {
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(renderRoleLegendLine() + "\n")
+	b.WriteString(renderKeysLine(width, "tab switch view, r refresh, t toggle-log, q quit") + "\n")
+	if m.showTickLog {
+		b.WriteString("\n")
+		b.WriteString(renderTickLogBlock(width, 70, m.tickLog, 5))
+	}
+	if !m.lastUpdated.IsZero() {
+		b.WriteString("\n" + mutedStyle.Render("updated: "+m.lastUpdated.Format("15:04:05")) + "\n")
+	}
 	return b.String()
 }
 
