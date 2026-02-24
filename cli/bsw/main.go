@@ -25,14 +25,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	defaultConfigPath = ".bsw/config.json"
-	defaultMetaPath   = ".bsw/swarm.toml"
-	defaultFlowPath   = ".bsw/flow.toml"
-	defaultActor      = "bsw"
-	tmuxFieldSep      = "_BSW_SEP_"
+	defaultConfigPath  = ".bsw/config.json"
+	defaultMetaPath    = ".bsw/swarm.toml"
+	defaultFlowPath    = ".bsw/flow.toml"
+	legacyFlowPathYML  = ".bsw/flow.yml"
+	legacyFlowPathYAML = ".bsw/flow.yaml"
+	defaultActor       = "bsw"
+	tmuxFieldSep       = "_BSW_SEP_"
 )
 
 var (
@@ -88,30 +91,30 @@ func (s *stringSliceFlag) String() string {
 }
 
 type FlowSpec struct {
-	Version     int              `toml:"version"`
-	Start       string           `toml:"start"`
-	States      []FlowState      `toml:"states"`
-	Transitions []FlowTransition `toml:"transitions"`
+	Version     int              `toml:"version" yaml:"version"`
+	Start       string           `toml:"start" yaml:"start"`
+	States      []FlowState      `toml:"states" yaml:"states"`
+	Transitions []FlowTransition `toml:"transitions" yaml:"transitions"`
 }
 
 type FlowState struct {
-	ID                     string `toml:"id"`
-	Kind                   string `toml:"kind"`
-	Label                  string `toml:"label"`
-	Prompt                 string `toml:"prompt"`
-	Provider               string `toml:"provider"`
-	Model                  string `toml:"model"`
-	Effort                 string `toml:"effort"`
-	Workers                int    `toml:"workers"`
-	MaxIdle                string `toml:"max_idle"`
-	MaxLifetime            string `toml:"max_lifetime"`
-	MaxBusyWithoutProgress string `toml:"max_busy_without_progress"`
-	Respawn                string `toml:"respawn"`
-	OneShot                string `toml:"one_shot"`
-	ColorBG                string `toml:"color_bg"`
-	ColorFG                string `toml:"color_fg"`
-	TmuxBG                 string `toml:"tmux_bg"`
-	TmuxFG                 string `toml:"tmux_fg"`
+	ID                     string `toml:"id" yaml:"id"`
+	Kind                   string `toml:"kind" yaml:"kind"`
+	Label                  string `toml:"label" yaml:"label"`
+	Prompt                 string `toml:"prompt" yaml:"prompt"`
+	Provider               string `toml:"provider" yaml:"provider"`
+	Model                  string `toml:"model" yaml:"model"`
+	Effort                 string `toml:"effort" yaml:"effort"`
+	Workers                int    `toml:"workers" yaml:"workers"`
+	MaxIdle                string `toml:"max_idle" yaml:"max_idle"`
+	MaxLifetime            string `toml:"max_lifetime" yaml:"max_lifetime"`
+	MaxBusyWithoutProgress string `toml:"max_busy_without_progress" yaml:"max_busy_without_progress"`
+	Respawn                string `toml:"respawn" yaml:"respawn"`
+	OneShot                string `toml:"one_shot" yaml:"one_shot"`
+	ColorBG                string `toml:"color_bg" yaml:"color_bg"`
+	ColorFG                string `toml:"color_fg" yaml:"color_fg"`
+	TmuxBG                 string `toml:"tmux_bg" yaml:"tmux_bg"`
+	TmuxFG                 string `toml:"tmux_fg" yaml:"tmux_fg"`
 }
 
 type WorkerLifecyclePolicy struct {
@@ -124,11 +127,11 @@ type WorkerLifecyclePolicy struct {
 }
 
 type FlowTransition struct {
-	From    string   `toml:"from"`
-	On      string   `toml:"on"`
-	To      string   `toml:"to"`
-	Guard   string   `toml:"guard"`
-	Actions []string `toml:"actions"`
+	From    string   `toml:"from" yaml:"from"`
+	On      string   `toml:"on" yaml:"on"`
+	To      string   `toml:"to" yaml:"to"`
+	Guard   string   `toml:"guard" yaml:"guard"`
+	Actions []string `toml:"actions" yaml:"actions"`
 }
 
 func (s *stringSliceFlag) Set(v string) error {
@@ -285,6 +288,7 @@ type SwarmBeacon struct {
 	Role   string
 	State  string
 	BeadID string
+	Reason string
 	At     time.Time
 }
 
@@ -352,6 +356,44 @@ Usage:
   bsw tui    [--config .bsw/config.json] [--refresh 1]
   bsw zoom   --session <name> --pane <index>
 
+Process (recommended):
+1) Initialize project scaffolding (config + flow + prompts):
+   bsw init
+
+2) Attach execution context (single active plan + optional topics):
+   bsw attach --plan docs/exec-plans/active/<plan>.md --topic <t1> --topic <t2>
+   Notes:
+   - only one plan_file is attached at a time
+   - topics are metadata/context for plan-review (not assignment filters)
+
+3) Create/ensure worker panes for current session:
+   bsw spawn
+
+4) Start orchestration loop:
+   bsw daemon --mode hybrid
+   (or one cycle only: bsw tick / bsw tock)
+
+5) Observe and inspect:
+   bsw tui
+   bsw status
+
+Swarm session model:
+- tmux session name comes from .bsw/config.json -> session
+- to run a separate swarm, use a different session name (or separate worktree)
+- when changing plans in same project, stop old daemon, then re-attach:
+  bsw attach --plan <new-plan>
+
+State and transitions:
+- source of truth is beads (labels/assignee/comments/STATE markers)
+- queue labels: needs-impl, needs-proof, needs-review
+- default flow: implement -> proof -> review
+- plan-review is triggered when no active bead work remains
+
+Runtime behaviors:
+- daemon can assign, nudge, and recycle panes based on lifecycle policy
+- transcript + beacon signals are used for activity/status inference
+- agent-mail registration can happen automatically on worker launch
+
 Design:
 - Assignment state lives in beads only (assignee/owner/labels/comments).
 - Worker roles are strict: implement, proof, review.
@@ -404,9 +446,9 @@ func runDoctor(args []string) error {
 		return err
 	}
 
-	flowPath := filepath.Join(cfg.ProjectRoot, defaultFlowPath)
+	flowPath := effectiveFlowPath(cfg.ProjectRoot)
 	checks = append(checks, check{name: "config", err: nil})
-	checks = append(checks, check{name: "flow.toml", err: mustFile(flowPath)})
+	checks = append(checks, check{name: "flow.file", err: mustFile(flowPath)})
 	if flow, ferr := loadFlowSpec(cfg.ProjectRoot); ferr != nil {
 		checks = append(checks, check{name: "flow.parse", err: ferr})
 	} else {
@@ -837,6 +879,9 @@ func runDaemon(args []string) error {
 	debounceDur := time.Duration(*debounceMs) * time.Millisecond
 	previousByWorker := map[string]WorkerStatus{}
 	planReviewLaunched := false
+	planReviewLastNudge := time.Time{}
+	const planReviewRetryCooldown = 2 * time.Minute
+	const planReviewStopGrace = 3 * time.Minute
 
 	runCycle := func(trigger string) (bool, error) {
 		if err := ensureSessionAndPanes(cfg); err != nil {
@@ -850,19 +895,40 @@ func runDaemon(args []string) error {
 		previousByWorker = snapshotStatusMap(statuses)
 		if hasPrimaryBeadWork(cfg, statuses) {
 			planReviewLaunched = false
+			planReviewLastNudge = time.Time{}
 			return false, nil
 		}
 		flow, _ := loadFlowSpec(cfg.ProjectRoot)
-		if !planReviewLaunched && flowWantsPlanReviewer(flow) {
-			launched, err := maybeLaunchPlanReviewer(cfg)
-			if err != nil {
-				return false, err
+		if flowWantsPlanReviewer(flow) {
+			shouldNudge := false
+			if !planReviewLaunched {
+				shouldNudge = true
+			} else if !isPlanReviewerWorking(statuses) && !planReviewLastNudge.IsZero() && time.Since(planReviewLastNudge) >= planReviewRetryCooldown {
+				shouldNudge = true
 			}
-			if launched {
-				planReviewLaunched = true
-				fmt.Println("[daemon] no queue left; launched one-shot plan reviewer")
-				return false, nil
+			if shouldNudge {
+				launched, err := maybeLaunchPlanReviewer(cfg)
+				if err != nil {
+					return false, err
+				}
+				if launched {
+					planReviewLaunched = true
+					planReviewLastNudge = time.Now()
+					if shouldNudge && !planReviewLastNudge.IsZero() {
+						fmt.Println("[daemon] no queue left; launched/re-nudged plan reviewer")
+					}
+					return false, nil
+				}
 			}
+		}
+		planReviewDone := planReviewLaunched && hasPlanReviewerCompletionSignal(statuses, planReviewLastNudge)
+		if planReviewDone && flowWantsStopOnNoWork(flow) && !hasPrimaryBeadWork(cfg, statuses) {
+			fmt.Println("[daemon] plan-review completed and no active bead work remains; stopping")
+			return true, nil
+		}
+		if planReviewLaunched && flowWantsStopOnNoWork(flow) && !hasPrimaryBeadWork(cfg, statuses) && !isPlanReviewerWorking(statuses) && !planReviewLastNudge.IsZero() && time.Since(planReviewLastNudge) >= planReviewStopGrace {
+			fmt.Println("[daemon] plan-review grace window elapsed with no active bead work; stopping")
+			return true, nil
 		}
 		if shouldStopDaemonForNoWork(cfg, statuses) && flowWantsStopOnNoWork(flow) {
 			fmt.Println("[daemon] no actionable work left (queue=0 assigned=0); stopping")
@@ -1078,7 +1144,7 @@ func inferCurrentFlowNode(flow FlowSpec, stages WorkflowStageCounts, rows []Work
 
 func renderFlowDAGLines(flow FlowSpec, current string, width int) []string {
 	if len(flow.States) == 0 {
-		return []string{reduce("(no .bsw/flow.toml states)", max(20, width-2))}
+		return []string{reduce("(no .bsw/flow.{toml,yaml} states)", max(20, width-2))}
 	}
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	active := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
@@ -1169,8 +1235,78 @@ func orderedFlowNodes(flow FlowSpec) []string {
 	return out
 }
 
+func isPlanReviewerWorking(statuses []WorkerStatus) bool {
+	for _, s := range statuses {
+		if !strings.EqualFold(strings.TrimSpace(s.Role), "plan-review") {
+			continue
+		}
+		st := strings.ToLower(strings.TrimSpace(s.State))
+		if st == "busy" || st == "assigned" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPlanReviewerCompletionSignal(statuses []WorkerStatus, lastNudge time.Time) bool {
+	if lastNudge.IsZero() {
+		return false
+	}
+	sinceNudge := time.Since(lastNudge)
+	slack := 8 * time.Second
+	for _, s := range statuses {
+		if !strings.EqualFold(strings.TrimSpace(s.Role), "plan-review") {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(s.Reason), "beacon-plan-review-done") || strings.EqualFold(strings.TrimSpace(s.Reason), "pane-state-plan-done") {
+			return true
+		}
+		st := strings.ToLower(strings.TrimSpace(s.State))
+		if st == "busy" || st == "assigned" {
+			return false
+		}
+		if hasPlanDoneMarkerInPane(s.Session, s.Pane) {
+			return true
+		}
+		// Activity/transcript touched after last nudge => run likely executed.
+		if s.ActivityAge > 0 && s.ActivityAge <= sinceNudge+slack {
+			return true
+		}
+		if s.TranscriptAge > 0 && s.TranscriptAge <= sinceNudge+slack {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPlanDoneMarkerInPane(session string, pane int) bool {
+	out, err := runCommand("", "tmux", "capture-pane", "-p", "-t", fmt.Sprintf("%s.%d", session, pane), "-S", "-100")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(out), "state plan:done") || strings.Contains(strings.ToLower(out), "state: plan:done")
+}
+
+func hasPendingCommitQueue(projectRoot string) bool {
+	q, err := loadCommitQueue(projectRoot)
+	if err != nil {
+		return false
+	}
+	return len(q.Pending) > 0
+}
+
 func hasActionableWork(cfg Config, statuses []WorkerStatus) bool {
-	assigned := countAssignedRows(statuses)
+	assigned := 0
+	for _, s := range statuses {
+		if strings.TrimSpace(s.BeadID) == "" {
+			continue
+		}
+		role := strings.ToLower(strings.TrimSpace(s.Role))
+		if role == "committer" || role == "plan-review" {
+			continue
+		}
+		assigned++
+	}
 	if assigned > 0 {
 		return true
 	}
@@ -1182,11 +1318,7 @@ func hasActionableWork(cfg Config, statuses []WorkerStatus) bool {
 	if totalQueueCount(queue) > 0 {
 		return true
 	}
-	commitQ, err := loadCommitQueue(cfg.ProjectRoot)
-	if err != nil {
-		return false
-	}
-	return len(commitQ.Pending) > 0
+	return hasPendingCommitQueue(cfg.ProjectRoot)
 }
 
 func maybeLaunchPlanReviewer(cfg Config) (bool, error) {
@@ -1209,7 +1341,18 @@ func maybeLaunchPlanReviewer(cfg Config) (bool, error) {
 	if panes, err := listPanes(cfg.Session, false); err == nil {
 		for _, p := range panes {
 			if strings.TrimSpace(p.PaneTitle) == workerID {
-				return false, nil
+				applyPaneProfileStyle(cfg.Session, p.PaneIndex, workerID)
+				if shellCommands[strings.ToLower(strings.TrimSpace(p.CurrentCommand))] {
+					maybeRegisterWorker(cfg, role, workerID)
+					if err := launchWorker(cfg, role, workerID, p.PaneIndex); err != nil {
+						return false, err
+					}
+					time.Sleep(1200 * time.Millisecond)
+				}
+				if err := sendAgentPrompt(cfg.Session, p.PaneIndex, planReviewMessage(cfg)); err != nil {
+					return false, err
+				}
+				return true, nil
 			}
 		}
 	}
@@ -1247,6 +1390,12 @@ func planReviewMessage(cfg Config) string {
 	fmt.Fprintf(&b, "PLAN_REVIEW project=%s\n", cfg.ProjectRoot)
 	fmt.Fprintf(&b, "Goal: review current execution plan and recreate/reopen missing beads if more work is needed.\n")
 	fmt.Fprintf(&b, "Use the workflow prompt and produce concrete bead actions using br.\n")
+	fmt.Fprintf(&b, "Runtime Protocol (mandatory):\n")
+	fmt.Fprintf(&b, "- First emit: SWARM_STATUS role=plan-review state=WORKING\n")
+	fmt.Fprintf(&b, "- On completion emit BOTH lines:\n")
+	fmt.Fprintf(&b, "  STATE plan:done\n")
+	fmt.Fprintf(&b, "  SWARM_STATUS role=plan-review state=WAITING reason=plan_review_done\n")
+	fmt.Fprintf(&b, "- Do not omit beacon/state lines even when no changes are needed.\n")
 	fmt.Fprintf(&b, "Rules:\n")
 	fmt.Fprintf(&b, "- Create actionable beads with needs-impl label.\n")
 	fmt.Fprintf(&b, "- If work is already complete, do not create duplicate beads.\n")
@@ -1608,28 +1757,72 @@ func writeDefaultFlowTOML(path string) error {
 	return os.WriteFile(path, []byte(defaultFlowTOML), 0o644)
 }
 
+func effectiveFlowPath(projectRoot string) string {
+	candidates := []string{
+		filepath.Join(projectRoot, defaultFlowPath),
+		filepath.Join(projectRoot, legacyFlowPathYAML),
+		filepath.Join(projectRoot, legacyFlowPathYML),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return candidates[0]
+}
+
 func loadFlowSpec(projectRoot string) (FlowSpec, error) {
-	path := filepath.Join(projectRoot, defaultFlowPath)
-	buf, err := os.ReadFile(path)
-	if err != nil {
-		return FlowSpec{}, err
+	type flowDoc struct {
+		Version     int              `toml:"version" yaml:"version"`
+		Start       string           `toml:"start" yaml:"start"`
+		States      []FlowState      `toml:"states" yaml:"states"`
+		Transitions []FlowTransition `toml:"transitions" yaml:"transitions"`
 	}
-	var doc struct {
-		Version     int              `toml:"version"`
-		Start       string           `toml:"start"`
-		States      []FlowState      `toml:"states"`
-		Transitions []FlowTransition `toml:"transitions"`
+	candidates := []struct {
+		path   string
+		format string
+	}{
+		{path: filepath.Join(projectRoot, defaultFlowPath), format: "toml"},
+		{path: filepath.Join(projectRoot, legacyFlowPathYAML), format: "yaml"},
+		{path: filepath.Join(projectRoot, legacyFlowPathYML), format: "yaml"},
 	}
-	if err := toml.Unmarshal(buf, &doc); err != nil {
-		return FlowSpec{}, err
+	var firstErr error
+	for _, c := range candidates {
+		buf, err := os.ReadFile(c.path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		var doc flowDoc
+		switch c.format {
+		case "yaml":
+			err = yaml.Unmarshal(buf, &doc)
+		default:
+			err = toml.Unmarshal(buf, &doc)
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s parse failed: %w", c.path, err)
+			}
+			continue
+		}
+		flow := FlowSpec{
+			Version:     doc.Version,
+			Start:       strings.TrimSpace(doc.Start),
+			States:      doc.States,
+			Transitions: doc.Transitions,
+		}
+		return flow, nil
 	}
-	flow := FlowSpec{
-		Version:     doc.Version,
-		Start:       strings.TrimSpace(doc.Start),
-		States:      doc.States,
-		Transitions: doc.Transitions,
+	if firstErr != nil {
+		return FlowSpec{}, firstErr
 	}
-	return flow, nil
+	return FlowSpec{}, os.ErrNotExist
 }
 
 func runTick(args []string) error {
@@ -1758,6 +1951,16 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 	if err != nil {
 		return nil, err
 	}
+	dedupChanged, err := dedupeWorkerAssignees(cfg, beads)
+	if err != nil {
+		return nil, err
+	}
+	if dedupChanged > 0 {
+		beads, err = listBeads(cfg.ProjectRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
 	changed, err := reconcileBeadTransitions(cfg, beads)
 	if err != nil {
 		return nil, err
@@ -1858,7 +2061,9 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		if strings.TrimSpace(s.BeadID) != "" {
 			roleCfg, roleOK := roleMap[s.Role]
 			bead := beadByID[s.BeadID]
-			if shouldReleaseStuckAssignment(cfg, *s, bead) {
+			// Keep auto-release for implement only. Proof/review can appear transcript-idle
+			// while still processing, which causes assignment ping-pong.
+			if strings.EqualFold(strings.TrimSpace(s.Role), "implement") && shouldReleaseStuckAssignment(cfg, *s, bead) {
 				if _, err := runCommand(cfg.ProjectRoot, "br", "update", s.BeadID, "--assignee", "", "--actor", cfg.Actor); err == nil {
 					if roleOK && bead.ID != "" {
 						queueByLabel[roleCfg.Label] = append(queueByLabel[roleCfg.Label], bead)
@@ -1997,10 +2202,15 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		}
 
 		// Reap idle/waiting workers when their role has no queue work.
+		// Keep primary lanes warm; only retire async/ephemeral roles.
 		if strings.TrimSpace(s.BeadID) != "" {
 			continue
 		}
 		if stLower != "idle" && stLower != "waiting" && stLower != "ready" {
+			continue
+		}
+		roleName := strings.ToLower(strings.TrimSpace(s.Role))
+		if roleName != "committer" && roleName != "plan-review" {
 			continue
 		}
 		noWork := false
@@ -2025,6 +2235,41 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 	}
 
 	return statuses, nil
+}
+
+func dedupeWorkerAssignees(cfg Config, beads []Bead) (int, error) {
+	byAssignee := map[string][]Bead{}
+	for _, b := range beads {
+		a := strings.TrimSpace(b.Assignee)
+		if a == "" {
+			continue
+		}
+		byAssignee[a] = append(byAssignee[a], b)
+	}
+	changed := 0
+	for assignee, items := range byAssignee {
+		if len(items) <= 1 {
+			continue
+		}
+		sort.Slice(items, func(i, j int) bool {
+			ti := parseRuntimeTime(items[i].UpdatedAt)
+			tj := parseRuntimeTime(items[j].UpdatedAt)
+			if !ti.Equal(tj) {
+				return ti.After(tj)
+			}
+			return items[i].ID < items[j].ID
+		})
+		keep := items[0].ID
+		for _, b := range items[1:] {
+			_, err := runCommand(cfg.ProjectRoot, "br", "update", b.ID, "--assignee", "", "--actor", cfg.Actor)
+			if err != nil {
+				return changed, err
+			}
+			changed++
+		}
+		fmt.Fprintf(os.Stderr, "warning: deduped assignee %s; kept %s released %d\n", assignee, keep, len(items)-1)
+	}
+	return changed, nil
 }
 
 func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
@@ -2218,10 +2463,9 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 		if st.State == "busy" && strings.TrimSpace(st.BeadID) != "" && cfg.IdleSeconds > 0 {
 			idleCutoff := idleCutoffForWorker(cfg, st.Provider)
 			if normalizeProvider(st.Provider) == "codex" {
-				// Codex can pause UI output briefly; require stronger idle evidence to avoid false waiting.
-				if st.TokenPerMinute <= 0 && idleCutoff > 0 &&
-					st.ActivityAge > idleCutoff &&
-					(st.TranscriptAge == 0 || st.TranscriptAge > idleCutoff) {
+				// Codex can pause UI output briefly; prefer dual-signal idle, but allow
+				// transcript-only idle when pane activity timestamp is unavailable.
+				if shouldMarkCodexAssignedWaiting(st, idleCutoff) {
 					st.State = "waiting"
 					st.Reason = "assigned-idle"
 				}
@@ -2241,10 +2485,7 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 				// For codex, only accept waiting when we also have idle-age evidence.
 				if stateHint == "waiting" && normalizeProvider(st.Provider) == "codex" {
 					idleCutoff := idleCutoffForWorker(cfg, st.Provider)
-					if st.TokenPerMinute <= 0 &&
-						idleCutoff > 0 &&
-						st.ActivityAge > idleCutoff &&
-						(st.TranscriptAge == 0 || st.TranscriptAge > idleCutoff) {
+					if shouldMarkCodexAssignedWaiting(st, idleCutoff) {
 						st.State = stateHint
 						st.Reason = reason
 					}
@@ -2293,6 +2534,22 @@ func buildActivity(s WorkerStatus) string {
 		return "-"
 	}
 	return strings.Join(parts, " ")
+}
+
+func shouldMarkCodexAssignedWaiting(st WorkerStatus, idleCutoff time.Duration) bool {
+	if idleCutoff <= 0 || st.TokenPerMinute > 0 {
+		return false
+	}
+	// Preferred: both signals show idle.
+	if st.ActivityAge > idleCutoff && st.TranscriptAge > idleCutoff {
+		return true
+	}
+	// Fallback for tmux builds where pane_activity is often unavailable/zero:
+	// if transcript is stale for a long window, treat as waiting.
+	if st.ActivityAge <= 0 && st.TranscriptAge > 3*idleCutoff {
+		return true
+	}
+	return false
 }
 
 func idleCutoffForWorker(cfg Config, provider string) time.Duration {
@@ -2458,7 +2715,12 @@ func desiredWorkersByRole(cfg Config) map[string]int {
 			hasWork = len(queue[role.Label]) > 0
 		}
 		if !hasWork && assignedByRole[role.Name] == 0 {
-			desired[role.Name] = 0
+			// Keep primary lanes warm to avoid pane churn (kill/recreate loops)
+			// when queue briefly oscillates on event/fallback ticks.
+			roleName := strings.ToLower(strings.TrimSpace(role.Name))
+			if roleName == "committer" || roleName == "plan-review" {
+				desired[role.Name] = 0
+			}
 		}
 	}
 	return desired
@@ -4308,6 +4570,13 @@ func loadConfig(path string) (Config, error) {
 		cfg.Roles[i].PromptFile = expandHome(cfg.Roles[i].PromptFile)
 	}
 	if !hasRoleConfig(cfg.Roles, "committer") {
+		committerPrompt := filepath.Join(cfg.ProjectRoot, ".bsw", "prompts", "impl_committer.md")
+		if _, err := os.Stat(committerPrompt); err != nil {
+			legacyPrompt := filepath.Join(cfg.ProjectRoot, "docs", "workflow", "prompts", "impl_committer.md")
+			if _, lerr := os.Stat(legacyPrompt); lerr == nil {
+				committerPrompt = legacyPrompt
+			}
+		}
 		cfg.Roles = append(cfg.Roles, RoleConfig{
 			Name:           "committer",
 			Label:          "commit-queue",
@@ -4315,7 +4584,7 @@ func loadConfig(path string) (Config, error) {
 			Provider:       "cc",
 			Model:          "opus",
 			Effort:         "medium",
-			PromptFile:     filepath.Join(cfg.ProjectRoot, ".bsw", "prompts", "impl_committer.md"),
+			PromptFile:     committerPrompt,
 			LaunchCommand:  "",
 			TranscriptGlob: "~/.claude/projects/*/*.jsonl",
 		})
@@ -4331,6 +4600,12 @@ func loadConfig(path string) (Config, error) {
 	}
 	if strings.TrimSpace(cfg.PlanReview.PromptFile) == "" {
 		cfg.PlanReview.PromptFile = filepath.Join(cfg.ProjectRoot, ".bsw", "prompts", "plan_reviewer.md")
+		if _, err := os.Stat(cfg.PlanReview.PromptFile); err != nil {
+			legacyPrompt := filepath.Join(cfg.ProjectRoot, "docs", "workflow", "prompts", "plan_reviewer.md")
+			if _, lerr := os.Stat(legacyPrompt); lerr == nil {
+				cfg.PlanReview.PromptFile = legacyPrompt
+			}
+		}
 	}
 	// Backward-compatible default: enable plan reviewer when legacy config omitted the field.
 	if !planReviewEnabledExplicit {
@@ -4980,6 +5255,7 @@ func parseSwarmBeacons(text string) []SwarmBeacon {
 			Role:   strings.ToUpper(role),
 			State:  strings.ToUpper(state),
 			BeadID: strings.TrimSpace(meta["bead"]),
+			Reason: strings.ToLower(strings.TrimSpace(meta["reason"])),
 		})
 	}
 	return out
@@ -5040,6 +5316,10 @@ func applyBeaconState(cfg Config, st *WorkerStatus, beacon SwarmBeacon) {
 		}
 		st.State = "waiting"
 		st.Reason = "beacon-waiting"
+		if strings.EqualFold(strings.TrimSpace(st.Role), "plan-review") && strings.EqualFold(strings.TrimSpace(beacon.Reason), "plan_review_done") {
+			st.State = "ready"
+			st.Reason = "beacon-plan-review-done"
+		}
 	case "WORKING":
 		if strings.TrimSpace(st.BeadID) != "" && (strings.TrimSpace(beacon.BeadID) == "" || strings.TrimSpace(beacon.BeadID) == strings.TrimSpace(st.BeadID)) {
 			st.State = "busy"
