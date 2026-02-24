@@ -1,0 +1,22 @@
+# External dependencies required by boring-swarm
+# install.sh validates these are present and at compatible versions
+
+[deps.br]
+description = "Beads Rust - work item CRUD"
+min_version = "0.1.0"
+check = "br --version"
+
+[deps.bv]
+description = "Beads Verify - verification and robot ops"
+min_version = "0.1.0"
+check = "bv --version"
+
+[deps.ntm]
+description = "Native Tmux Manager - tmux session/pane management"
+min_version = "0.1.0"
+check = "ntm --version"
+
+[deps.agent-mail]
+description = "Agent Mail MCP server - inter-agent messaging"
+type = "service"
+check = "curl -sf http://127.0.0.1:8765/health"

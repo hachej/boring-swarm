@@ -1,0 +1,72 @@
+name: Build and Publish Wheels
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install go-to-wheel
+        run: pip install go-to-wheel
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build wheels
+        run: |
+          go-to-wheel cli/bsw \
+            --name boring-swarm \
+            --version "${{ steps.version.outputs.version }}" \
+            --entry-point bsw \
+            --description "Multi-agent swarm orchestration harness" \
+            --author "hachej" \
+            --license "MIT" \
+            --url "https://github.com/hachej/boring-swarm" \
+            --readme README.md \
+            --set-version-var main.version \
+            --output-dir dist/
+
+      - name: Upload wheels to release
+        run: gh release upload "${{ github.ref_name }}" dist/*.whl
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: dist/*.whl
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
