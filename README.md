@@ -2,6 +2,48 @@
 
 Self-contained multi-agent swarm orchestration. One binary (`bsw`), one declarative `flow.toml`, and default worker prompts.
 
+## Swarm Concept
+
+`bsw` runs a bead-native software factory in tmux.
+
+- Work unit: a bead (`br` issue) with labels like `needs-impl`, `needs-proof`, `needs-review`.
+- Orchestrator: `bsw` daemon/robot, which assigns beads, enforces transitions, and manages worker lifecycle.
+- Workers: dedicated panes per role (`implement`, `proof`, `review`, optional `committer`, `plan-review`).
+- Source of truth: bead state and comments (`STATE ...`), plus your local `.bsw/flow.toml`.
+
+Each worker is single-purpose. A worker does not switch roles.
+
+## Actors
+
+- `implement`: writes code/docs for assigned bead only.
+- `proof`: executes gates and evidence checks; does not implement.
+- `review`: validates correctness/scope against bead acceptance criteria.
+- `committer` (optional): async commit/push worker triggered by configured workflow events.
+- `plan-review` (optional): runs after bead lane is exhausted to close or regenerate follow-up work.
+
+## Quality Gates
+
+Default quality model is strict lane progression:
+
+- Gate 1: implementation complete (`STATE impl:done`) moves bead to proof.
+- Gate 2: proof pass/fail (`STATE proof:passed|failed`) moves bead to review or back to implement.
+- Gate 3: review pass/fail (`STATE review:passed|failed`) closes bead or sends it back to implement.
+
+The gate semantics are encoded in `flow.toml` transitions/actions, not hardcoded in prompts.
+
+## Standard Flow
+
+Default lane:
+
+`needs-impl` -> `needs-proof` -> `needs-review` -> `closed`
+
+On rejection:
+
+`proof failed` -> back to `needs-impl`  
+`review failed` -> back to `needs-impl`
+
+When no active bead work remains, optional `plan-review` can run and optionally stop daemon per flow policy.
+
 ## Install
 
 ```bash
