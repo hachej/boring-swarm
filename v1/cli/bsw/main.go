@@ -37,6 +37,7 @@ const (
 	legacyFlowPathYAML = ".bsw/flow.yaml"
 	defaultActor       = "bsw"
 	tmuxFieldSep       = "_BSW_SEP_"
+	maxRecoverAttempts = 3
 )
 
 var (
@@ -201,10 +202,13 @@ type WorkerRef struct {
 
 type WorkerStatus struct {
 	Session        string
+	ResumeID       string
 	WorkerID       string
 	AgentName      string
 	Role           string
 	Pane           int
+	ProcessStatus  string
+	TaskStatus     string
 	Provider       string
 	Model          string
 	Effort         string
@@ -219,6 +223,16 @@ type WorkerStatus struct {
 	TranscriptAge  time.Duration
 	Activity       string
 	Reason         string
+	LogPath        string
+	TranscriptPath string
+}
+
+type workerLogEntry struct {
+	Time    string
+	Summary string
+	Raw     string
+	Pretty  string
+	IsJSON  bool
 }
 
 type WorkerRuntimeFile struct {
@@ -231,6 +245,10 @@ type WorkerRuntime struct {
 	SessionID        string `json:"session_id,omitempty"`
 	TranscriptPath   string `json:"transcript_path,omitempty"`
 	LaunchedAt       string `json:"launched_at,omitempty"`
+	AssignedBeadID   string `json:"assigned_bead_id,omitempty"`
+	RecoverBeadID    string `json:"recover_bead_id,omitempty"`
+	RecoverAttempts  int    `json:"recover_attempts,omitempty"`
+	RecoverLastAt    string `json:"recover_last_at,omitempty"`
 	LastNudgeAt      string `json:"last_nudge_at,omitempty"`
 	LastNudgeBead    string `json:"last_nudge_bead,omitempty"`
 	LastReleasedAt   string `json:"last_released_at,omitempty"`
@@ -361,22 +379,22 @@ func printUsage() {
 
 Usage:
   bsw init   [--config .bsw/config.json] [--force]
-  bsw <state_machine> [--config .bsw/config.json] [--plan <path>] [--topic <name> ...] [--backend tmux|process] [--mode tick] [--once]
+  bsw <state_machine> [--config .bsw/config.json] [--plan <path>] [--topic <name> ...] [--mode tick] [--once]
   bsw spawn  [--config .bsw/config.json]
   bsw attach [--config .bsw/config.json] [--plan <path>] [--topic <name> ...]
   bsw add    --role <implement|proof|review> [--count 1] [--config .bsw/config.json]
-  bsw tick   [--config .bsw/config.json] [--backend tmux|process] [--continuous] [--poll 5]
+  bsw tick   [--config .bsw/config.json] [--continuous] [--poll 5]
   bsw tock   [--config .bsw/config.json]   # alias of tick
   bsw doctor [--config .bsw/config.json]
   bsw status [--config .bsw/config.json]
   bsw sessions [--config .bsw/config.json] # alias of status
   bsw logs   [--config .bsw/config.json] [--run <id>] [--tail 200] [--follow]
   bsw tui    [--config .bsw/config.json] [--refresh 1]
-  bsw zoom   --session <name> --pane <index> [--worker <id>]
+  bsw zoom   --worker <id> | (--session <name> --pane <index>)
 
-Process (recommended):
+Process mode:
 0) One-command mode (auto-init + optional attach + start scheduler):
-   bsw implement --backend process --mode tick --plan docs/exec-plans/active/<plan>.md
+   bsw implement --mode tick --plan docs/exec-plans/active/<plan>.md
    (reads .bsw/implement.toml as the active state machine)
 
 1) Initialize project scaffolding (config + flow + prompts):
@@ -388,13 +406,13 @@ Process (recommended):
    - only one plan_file is attached at a time
    - topics are metadata/context for plan-review (not assignment filters)
 
-3) Create/ensure worker panes for current session:
+3) Create/ensure worker processes for current session:
    bsw spawn
 
 4) Start orchestration loop:
    bsw tick --continuous
    (or one cycle only: bsw tick / bsw tock)
-   Process mode (no worker tmux panes): bsw tick --backend process --continuous
+   bsw tick --continuous
 
 5) Observe and inspect:
    bsw tui
@@ -402,7 +420,7 @@ Process (recommended):
    bsw logs --tail 200
 
 Swarm session model:
-- tmux session name comes from .bsw/config.json -> session
+- run session name comes from .bsw/config.json -> session
 - to run a separate swarm, use a different session name (or separate worktree)
 - when changing plans in same project, stop old daemon, then re-attach:
   bsw attach --plan <new-plan>
@@ -414,10 +432,10 @@ State and transitions:
 - plan-review is triggered when no active bead work remains
 
 Runtime behaviors:
-- daemon can assign, nudge, and recycle panes based on lifecycle policy
-- transcript + beacon signals are used for activity/status inference
+- daemon can assign, nudge, and recycle workers based on lifecycle policy
+- worker logs + transcript signals are used for activity/status inference
 - agent-mail registration can happen automatically on worker launch
-- runtime backend: "tmux" (default) or "process" via config.runtime_backend
+- runtime backend: "process" only
 
 Design:
 - Assignment state lives in beads only (assignee/owner/labels/comments).
@@ -491,11 +509,7 @@ func runDoctor(args []string) error {
 		checks = append(checks, check{name: "prompt:plan-review", err: mustFile(p)})
 	}
 
-	checks = append(checks,
-		check{name: "dep:tmux", err: mustCmd("tmux")},
-		check{name: "dep:br", err: mustCmd("br")},
-		check{name: "dep:ntm", err: mustCmd("ntm")},
-	)
+	checks = append(checks, check{name: "dep:br", err: mustCmd("br")})
 	needCodex := false
 	needCC := false
 	for _, r := range cfg.Roles {
@@ -566,7 +580,7 @@ func runInit(args []string) error {
 		Session:        fmt.Sprintf("%s-bsw", slug(filepath.Base(projectRoot))),
 		ProjectRoot:    projectRoot,
 		Actor:          defaultActor,
-		RuntimeBackend: "tmux",
+		RuntimeBackend: "process",
 		PollSeconds:    5,
 		IdleSeconds:    20,
 		Roles: []RoleConfig{
@@ -669,7 +683,6 @@ func runStateMachineCommand(name string, args []string) error {
 	plan := fs.String("plan", "", "plan file path to attach")
 	var topics stringSliceFlag
 	fs.Var(&topics, "topic", "topic to attach (repeatable)")
-	backend := fs.String("backend", "", "runtime backend override: tmux|process")
 	mode := fs.String("mode", "tick", "scheduler mode: tick|event|hybrid")
 	once := fs.Bool("once", false, "single cycle")
 	poll := fs.Int("poll", 0, "override poll interval seconds")
@@ -735,9 +748,6 @@ func runStateMachineCommand(name string, args []string) error {
 	}
 	if modeVal == "tick" {
 		tickArgs := []string{"--config", *configPath}
-		if b := strings.TrimSpace(*backend); b != "" {
-			tickArgs = append(tickArgs, "--backend", b)
-		}
 		if !*once {
 			tickArgs = append(tickArgs, "--continuous")
 		}
@@ -748,9 +758,6 @@ func runStateMachineCommand(name string, args []string) error {
 	}
 
 	daemonArgs := []string{"--config", *configPath, "--mode", modeVal}
-	if b := strings.TrimSpace(*backend); b != "" {
-		daemonArgs = append(daemonArgs, "--backend", b)
-	}
 	if *once {
 		daemonArgs = append(daemonArgs, "--once")
 	}
@@ -992,7 +999,6 @@ func ensureAddedRoleWorkers(cfg Config, role RoleConfig, startIdx, endIdx int) e
 func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config")
-	backend := fs.String("backend", "", "runtime backend override: tmux|process")
 	once := fs.Bool("once", false, "single run")
 	poll := fs.Int("poll", 0, "override poll interval seconds")
 	mode := fs.String("mode", "tick", "scheduler mode: tick|event|hybrid")
@@ -1009,12 +1015,6 @@ func runDaemon(args []string) error {
 	}
 	if err := validateConfig(cfg); err != nil {
 		return err
-	}
-	if b := strings.ToLower(strings.TrimSpace(*backend)); b != "" {
-		if b != "tmux" && b != "process" {
-			return fmt.Errorf("invalid --backend %q (expected tmux|process)", b)
-		}
-		cfg.RuntimeBackend = b
 	}
 	if err := ensureRunBinding(&cfg, true); err != nil {
 		return err
@@ -2033,7 +2033,6 @@ func loadFlowSpec(projectRoot string) (FlowSpec, error) {
 func runTick(args []string) error {
 	fs := flag.NewFlagSet("tick", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config")
-	backend := fs.String("backend", "", "runtime backend override: tmux|process")
 	continuous := fs.Bool("continuous", false, "run continuously (tick scheduler)")
 	poll := fs.Int("poll", 0, "poll interval seconds for --continuous")
 	if err := fs.Parse(args); err != nil {
@@ -2047,20 +2046,11 @@ func runTick(args []string) error {
 	if err := validateConfig(cfg); err != nil {
 		return err
 	}
-	if b := strings.ToLower(strings.TrimSpace(*backend)); b != "" {
-		if b != "tmux" && b != "process" {
-			return fmt.Errorf("invalid --backend %q (expected tmux|process)", b)
-		}
-		cfg.RuntimeBackend = b
-	}
 	if err := ensureRunBinding(&cfg, true); err != nil {
 		return err
 	}
 	if *continuous {
 		daemonArgs := []string{"--config", *configPath, "--mode", "tick"}
-		if strings.TrimSpace(*backend) != "" {
-			daemonArgs = append(daemonArgs, "--backend", strings.TrimSpace(*backend))
-		}
 		if *poll > 0 {
 			daemonArgs = append(daemonArgs, "--poll", strconv.Itoa(*poll))
 		}
@@ -2108,7 +2098,6 @@ func runTick(args []string) error {
 func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config")
-	backend := fs.String("backend", "", "runtime backend override: tmux|process")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -2119,12 +2108,6 @@ func runStatus(args []string) error {
 	}
 	if err := validateConfig(cfg); err != nil {
 		return err
-	}
-	if b := strings.ToLower(strings.TrimSpace(*backend)); b != "" {
-		if b != "tmux" && b != "process" {
-			return fmt.Errorf("invalid --backend %q (expected tmux|process)", b)
-		}
-		cfg.RuntimeBackend = b
 	}
 	if err := ensureRunBinding(&cfg, false); err != nil {
 		return err
@@ -2144,7 +2127,8 @@ func runLogs(args []string) error {
 	runID := fs.String("run", "", "run id (default: current run)")
 	tail := fs.Int("tail", 200, "max recent lines")
 	follow := fs.Bool("follow", false, "follow log output")
-	worker := fs.String("worker", "", "filter by worker id")
+	worker := fs.String("worker", "", "worker id (default: latest worker log for run)")
+	daemonLog := fs.Bool("daemon", false, "show daemon action log instead of worker log")
 	pane := fs.Int("pane", -1, "filter by pane index")
 	decision := fs.String("decision", "", "filter by decision (assign|release|reassign|state-change|nudge|attention|cycle-summary)")
 	changedOnly := fs.Bool("changed", false, "only changed events")
@@ -2162,9 +2146,50 @@ func runLogs(args []string) error {
 		id = strings.TrimSpace(cfg.RuntimeRunID)
 	}
 	path := runLogPath(cfg.ProjectRoot, id)
+	if strings.TrimSpace(id) == "" {
+		if latestID, latestPath, ok := findLatestRunLog(cfg.ProjectRoot); ok {
+			id = latestID
+			path = latestPath
+		}
+	}
 	if *tail < 1 {
 		*tail = 1
 	}
+	if !*daemonLog {
+		wid := strings.TrimSpace(*worker)
+		wpath, resolvedWid, err := resolveWorkerLogPath(cfg.ProjectRoot, id, wid)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("run=%s worker=%s log=%s\n", blankDash(id), blankDash(resolvedWid), wpath)
+		lines, err := tailTextFile(wpath, *tail)
+		if err != nil {
+			if os.IsNotExist(err) {
+				fmt.Println("(no worker log yet)")
+				return nil
+			}
+			return err
+		}
+		for _, ln := range lines {
+			fmt.Println(ln)
+		}
+		if !*follow {
+			return nil
+		}
+		return followTextLog(wpath)
+	}
+	if !runLogExists(path) {
+		if strings.TrimSpace(*runID) != "" {
+			fmt.Printf("run=%s log=%s\n", blankDash(id), path)
+			fmt.Println("(no daemon log for this run yet)")
+			return nil
+		}
+		if latestID, latestPath, ok := findLatestRunLog(cfg.ProjectRoot); ok {
+			id = latestID
+			path = latestPath
+		}
+	}
+
 	fmt.Printf("run=%s log=%s\n", blankDash(id), path)
 	pr := logPrintConfig{
 		Worker:      strings.TrimSpace(*worker),
@@ -2182,13 +2207,94 @@ func runLogs(args []string) error {
 	return followDaemonLog(path, pr)
 }
 
+func resolveWorkerLogPath(projectRoot, runID, workerID string) (string, string, error) {
+	run := strings.TrimSpace(runID)
+	if run == "" {
+		return "", "", errors.New("run id is required")
+	}
+	if wid := strings.TrimSpace(workerID); wid != "" {
+		path := processWorkerLogPath(projectRoot, run, wid)
+		if _, err := os.Stat(path); err == nil {
+			return path, wid, nil
+		}
+		return "", "", fmt.Errorf("worker log not found for %s", wid)
+	}
+	dir := filepath.Join(projectRoot, ".bsw", "runtime", "runs", run, "workers")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", "", err
+	}
+	type cand struct {
+		path string
+		mod  time.Time
+	}
+	cands := make([]cand, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		cands = append(cands, cand{path: p, mod: info.ModTime()})
+	}
+	if len(cands) == 0 {
+		return "", "", fmt.Errorf("no worker logs found in run %s", run)
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].mod.After(cands[j].mod) })
+	name := strings.TrimSuffix(filepath.Base(cands[0].path), ".log")
+	return cands[0].path, name, nil
+}
+
+func followTextLog(path string) error {
+	fmt.Println("(following; Ctrl-C to stop)")
+	offset := int64(0)
+	for {
+		f, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			return err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if offset > info.Size() {
+			offset = 0
+		}
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			return err
+		}
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			offset += int64(len(sc.Bytes())) + 1
+			fmt.Println(sc.Text())
+		}
+		if err := sc.Err(); err != nil {
+			f.Close()
+			return err
+		}
+		if pos, err := f.Seek(0, io.SeekCurrent); err == nil {
+			offset = pos
+		}
+		f.Close()
+		time.Sleep(1 * time.Second)
+	}
+}
+
 func runZoom(args []string) error {
 	fs := flag.NewFlagSet("zoom", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config")
-	backend := fs.String("backend", "", "runtime backend override: tmux|process")
-	session := fs.String("session", "", "tmux session")
-	pane := fs.Int("pane", -1, "pane index")
-	worker := fs.String("worker", "", "worker id (session:role:NN), used by process backend")
+	session := fs.String("session", "", "session name")
+	pane := fs.Int("pane", -1, "worker index")
+	worker := fs.String("worker", "", "worker id (session:role:NN)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -2196,36 +2302,23 @@ func runZoom(args []string) error {
 	if err != nil {
 		return err
 	}
-	if b := strings.ToLower(strings.TrimSpace(*backend)); b != "" {
-		if b != "tmux" && b != "process" {
-			return fmt.Errorf("invalid --backend %q (expected tmux|process)", b)
+	targetWorker := strings.TrimSpace(*worker)
+	if targetWorker == "" {
+		if *session == "" || *pane < 0 {
+			return errors.New("zoom requires --worker or (--session and --pane)")
 		}
-		cfg.RuntimeBackend = b
-	}
-	if isProcessBackend(cfg) {
-		targetWorker := strings.TrimSpace(*worker)
-		if targetWorker == "" {
-			if *session == "" || *pane < 0 {
-				return errors.New("process zoom requires --worker or (--session and --pane)")
-			}
-			resolved, err := resolveWorkerBySessionPane(cfg, *session, *pane)
-			if err != nil {
-				return err
-			}
-			targetWorker = resolved
+		resolved, err := resolveWorkerBySessionPane(cfg, *session, *pane)
+		if err != nil {
+			return err
 		}
-		return zoomProcessWorker(cfg, targetWorker)
+		targetWorker = resolved
 	}
-	if *session == "" || *pane < 0 {
-		return errors.New("zoom requires --session and --pane")
-	}
-	return zoomPane(*session, *pane)
+	return zoomProcessWorker(cfg, targetWorker)
 }
 
 func runTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config")
-	backend := fs.String("backend", "", "runtime backend override: tmux|process")
 	refresh := fs.Int("refresh", 1, "refresh interval seconds")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -2237,12 +2330,6 @@ func runTUI(args []string) error {
 	}
 	if err := validateConfig(cfg); err != nil {
 		return err
-	}
-	if b := strings.ToLower(strings.TrimSpace(*backend)); b != "" {
-		if b != "tmux" && b != "process" {
-			return fmt.Errorf("invalid --backend %q (expected tmux|process)", b)
-		}
-		cfg.RuntimeBackend = b
 	}
 	if err := ensureRunBinding(&cfg, false); err != nil {
 		return err
@@ -2259,12 +2346,14 @@ func runTUI(args []string) error {
 	}
 	m := finalModel.(tuiModel)
 	if m.zoomTarget != nil {
-		if isProcessBackend(cfg) {
-			return zoomProcessWorker(cfg, m.zoomTarget.WorkerID)
-		}
-		return zoomPane(m.zoomTarget.Session, m.zoomTarget.Pane)
+		return zoomProcessWorker(cfg, m.zoomTarget.WorkerID)
 	}
 	return nil
+}
+
+func shouldAutoUseProcessBackend(cfg Config) bool {
+	_ = cfg
+	return true
 }
 
 func daemonCycle(cfg Config) ([]WorkerStatus, error) {
@@ -2318,6 +2407,16 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		beadByID[b.ID] = b
 	}
 	runtimeMap, _ := loadWorkerRuntimeMap(cfg.ProjectRoot)
+	reservedBeads := map[string]bool{}
+	for _, rt := range runtimeMap {
+		id := strings.TrimSpace(rt.AssignedBeadID)
+		if id != "" {
+			reservedBeads[id] = true
+		}
+	}
+	for label, q := range queueByLabel {
+		queueByLabel[label] = filterQueueReservedBeads(q, reservedBeads)
+	}
 	runtimeDirty := false
 	now := time.Now().UTC()
 
@@ -2396,6 +2495,69 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		if strings.TrimSpace(s.BeadID) != "" {
 			roleCfg, roleOK := roleMap[s.Role]
 			bead := beadByID[s.BeadID]
+			if strings.TrimSpace(rt.AssignedBeadID) != strings.TrimSpace(s.BeadID) {
+				rt.AssignedBeadID = s.BeadID
+				clearRecovery(&rt)
+				runtimeMap[s.WorkerID] = rt
+				runtimeDirty = true
+			}
+			if roleOK {
+				if strings.TrimSpace(rt.RecoverBeadID) != strings.TrimSpace(s.BeadID) {
+					rt.RecoverBeadID = s.BeadID
+					rt.RecoverAttempts = 0
+					rt.RecoverLastAt = ""
+					runtimeMap[s.WorkerID] = rt
+					runtimeDirty = true
+				}
+				processDown := !strings.EqualFold(strings.TrimSpace(s.ProcessStatus), "running")
+				recoverable := strings.EqualFold(strings.TrimSpace(s.State), "blocked") ||
+					strings.EqualFold(strings.TrimSpace(s.State), "waiting") ||
+					strings.EqualFold(strings.TrimSpace(s.ProcessStatus), "retrying") ||
+					strings.EqualFold(strings.TrimSpace(s.ProcessStatus), "stopped") ||
+					strings.EqualFold(strings.TrimSpace(s.ProcessStatus), "launching")
+				if processDown && recoverable {
+					if rt.RecoverAttempts >= maxRecoverAttempts {
+						if _, err := runCommand(cfg.ProjectRoot, "br", "update", s.BeadID, "--assignee", "", "--actor", cfg.Actor); err == nil {
+							if bead.ID != "" {
+								queueByLabel[roleCfg.Label] = append(queueByLabel[roleCfg.Label], bead)
+							}
+							rt.AssignedBeadID = ""
+							rt.LastReleasedAt = now.Format(time.RFC3339Nano)
+							rt.LastReleasedBead = s.BeadID
+							clearRecovery(&rt)
+							runtimeMap[s.WorkerID] = rt
+							runtimeDirty = true
+							s.BeadID = ""
+							s.BeadTitle = ""
+							s.Label = ""
+							s.State = "idle"
+							s.Reason = "requeued-after-retries"
+							s.Activity = "released"
+						}
+						continue
+					}
+					if shouldAttemptRecovery(rt, now, 20*time.Second) {
+						msg := assignmentMessage(*s, bead, roleCfg)
+						if err := dispatchWorkerPrompt(cfg, *s, roleCfg, msg, runtimeMap); err == nil {
+							if isProcessBackend(cfg) {
+								runtimeDirty = true
+							}
+							rt.RecoverAttempts++
+							rt.RecoverLastAt = now.Format(time.RFC3339Nano)
+							runtimeMap[s.WorkerID] = rt
+							runtimeDirty = true
+							s.Reason = fmt.Sprintf("recover-attempt-%d", rt.RecoverAttempts)
+							s.Activity = "recovering"
+						}
+					}
+					continue
+				}
+				if rt.RecoverAttempts > 0 || strings.TrimSpace(rt.RecoverBeadID) != "" || strings.TrimSpace(rt.RecoverLastAt) != "" {
+					clearRecovery(&rt)
+					runtimeMap[s.WorkerID] = rt
+					runtimeDirty = true
+				}
+			}
 			// Keep auto-release for implement only. Proof/review can appear transcript-idle
 			// while still processing, which causes assignment ping-pong.
 			if strings.EqualFold(strings.TrimSpace(s.Role), "implement") && shouldReleaseStuckAssignment(cfg, *s, bead) {
@@ -2404,6 +2566,8 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 						queueByLabel[roleCfg.Label] = append(queueByLabel[roleCfg.Label], bead)
 					}
 					rt := runtimeMap[s.WorkerID]
+					rt.AssignedBeadID = ""
+					clearRecovery(&rt)
 					rt.LastReleasedAt = now.Format(time.RFC3339Nano)
 					rt.LastReleasedBead = s.BeadID
 					runtimeMap[s.WorkerID] = rt
@@ -2447,11 +2611,57 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		if !ok {
 			continue
 		}
+		// Sticky assignment policy: one worker keeps one bead until that bead exits this role.
+		// This prevents proof/review churn across ticks.
+		if pinned := strings.TrimSpace(rt.AssignedBeadID); pinned != "" {
+			pb, hasPinned := beadByID[pinned]
+			if hasPinned &&
+				firstNeedsLabel(pb.Labels) == roleCfg.Label &&
+				(strings.EqualFold(pb.Status, "open") || strings.EqualFold(pb.Status, "in_progress")) {
+				if strings.TrimSpace(pb.Assignee) == "" {
+					if err := assignBead(cfg, pb, s.WorkerID); err == nil {
+						queueByLabel[roleCfg.Label] = removeBeadFromQueue(queueByLabel[roleCfg.Label], pb.ID)
+						msg := assignmentMessage(*s, pb, roleCfg)
+						if derr := dispatchWorkerPrompt(cfg, *s, roleCfg, msg, runtimeMap); derr == nil {
+							if isProcessBackend(cfg) {
+								runtimeDirty = true
+							}
+						}
+						s.State = "assigned"
+						s.BeadID = pb.ID
+						s.BeadTitle = pb.Title
+						s.Label = roleCfg.Label
+						s.Activity = "assigned"
+						s.Reason = "assigned-sticky"
+						continue
+					}
+				}
+				if strings.TrimSpace(pb.Assignee) == strings.TrimSpace(s.WorkerID) {
+					queueByLabel[roleCfg.Label] = removeBeadFromQueue(queueByLabel[roleCfg.Label], pb.ID)
+					s.State = "assigned"
+					s.BeadID = pb.ID
+					s.BeadTitle = pb.Title
+					s.Label = roleCfg.Label
+					s.Reason = "sticky-assignment"
+					continue
+				}
+			}
+			// Drop stale pin when bead moved role/completed/or owned by another worker.
+			rt.AssignedBeadID = ""
+			clearRecovery(&rt)
+			runtimeMap[s.WorkerID] = rt
+			runtimeDirty = true
+		}
 		queue := queueByLabel[roleCfg.Label]
 		rt = runtimeMap[s.WorkerID]
 		candidate, remaining := pickAssignableBeadForWorker(rt, queue, now, 10*time.Minute)
 		queueByLabel[roleCfg.Label] = remaining
 		if candidate.ID == "" {
+			if rt.RecoverAttempts > 0 || strings.TrimSpace(rt.RecoverBeadID) != "" || strings.TrimSpace(rt.RecoverLastAt) != "" {
+				clearRecovery(&rt)
+				runtimeMap[s.WorkerID] = rt
+				runtimeDirty = true
+			}
 			s.State = "idle"
 			s.Reason = "queue-empty"
 			continue
@@ -2472,6 +2682,10 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		if isProcessBackend(cfg) {
 			runtimeDirty = true
 		}
+		rt.AssignedBeadID = candidate.ID
+		clearRecovery(&rt)
+		runtimeMap[s.WorkerID] = rt
+		runtimeDirty = true
 
 		s.State = "assigned"
 		s.BeadID = candidate.ID
@@ -2491,6 +2705,114 @@ func daemonCycle(cfg Config) ([]WorkerStatus, error) {
 		}
 	}
 	if isProcessBackend(cfg) {
+		flow, _ := loadFlowSpec(cfg.ProjectRoot)
+		policies := flowLifecyclePolicies(flow)
+		for i := range statuses {
+			s := &statuses[i]
+			policy, hasPolicy := policies[s.Role]
+			if !hasPolicy {
+				continue
+			}
+			idleAge := workerIdleAge(*s)
+			stLower := strings.ToLower(strings.TrimSpace(s.State))
+			assigned := strings.TrimSpace(s.BeadID) != ""
+
+			// Recycle stale long-lived process workers.
+			if policy.MaxLifetime > 0 && s.Duration > policy.MaxLifetime {
+				if assigned {
+					if bead, ok := beadByID[s.BeadID]; ok {
+						_ = applyTransitionUpdate(cfg, bead, firstNeedsLabel(bead.Labels), false)
+						if rc, ok := roleMap[s.Role]; ok {
+							queueByLabel[rc.Label] = append(queueByLabel[rc.Label], bead)
+						}
+					}
+				}
+				rt := runtimeMap[s.WorkerID]
+				killProcessGroup(rt.ProcessPID)
+				rt.ProcessPID = 0
+				rt.AssignedBeadID = ""
+				clearRecovery(&rt)
+				rt.LastReleasedAt = now.Format(time.RFC3339Nano)
+				rt.LastReleasedBead = s.BeadID
+				runtimeMap[s.WorkerID] = rt
+				runtimeDirty = true
+				s.BeadID = ""
+				s.BeadTitle = ""
+				s.Label = ""
+				s.ProcessStatus = "stopped"
+				s.TaskStatus = "idle"
+				s.State = "idle"
+				s.Reason = "recycled-max-lifetime"
+				s.Activity = "recycled"
+				continue
+			}
+
+			// Busy-without-progress watchdog for process mode.
+			if assigned && policy.MaxBusyWithoutProgress > 0 && idleAge > policy.MaxBusyWithoutProgress {
+				if bead, ok := beadByID[s.BeadID]; ok {
+					_ = applyTransitionUpdate(cfg, bead, firstNeedsLabel(bead.Labels), false)
+					if rc, ok := roleMap[s.Role]; ok {
+						queueByLabel[rc.Label] = append(queueByLabel[rc.Label], bead)
+					}
+				} else {
+					_, _ = runCommand(cfg.ProjectRoot, "br", "update", s.BeadID, "--assignee", "", "--actor", cfg.Actor)
+				}
+				rt := runtimeMap[s.WorkerID]
+				killProcessGroup(rt.ProcessPID)
+				rt.ProcessPID = 0
+				rt.AssignedBeadID = ""
+				clearRecovery(&rt)
+				rt.LastReleasedAt = now.Format(time.RFC3339Nano)
+				rt.LastReleasedBead = s.BeadID
+				runtimeMap[s.WorkerID] = rt
+				runtimeDirty = true
+				s.BeadID = ""
+				s.BeadTitle = ""
+				s.Label = ""
+				s.ProcessStatus = "stopped"
+				s.TaskStatus = "idle"
+				s.State = "idle"
+				s.Reason = "watchdog-busy-no-progress"
+				s.Activity = "requeued"
+				continue
+			}
+
+			// Retire idle one-shot or long-idle process workers.
+			if !assigned && policy.MaxIdle > 0 &&
+				(stLower == "idle" || stLower == "waiting" || stLower == "ready") &&
+				idleAge > policy.MaxIdle {
+				rt := runtimeMap[s.WorkerID]
+				killProcessGroup(rt.ProcessPID)
+				rt.ProcessPID = 0
+				clearRecovery(&rt)
+				runtimeMap[s.WorkerID] = rt
+				runtimeDirty = true
+				s.ProcessStatus = "stopped"
+				s.TaskStatus = "idle"
+				s.State = "idle"
+				s.Reason = "retired-max-idle"
+				s.Activity = "retired"
+				continue
+			}
+			if !assigned && policy.OneShot && stLower != "busy" {
+				rt := runtimeMap[s.WorkerID]
+				killProcessGroup(rt.ProcessPID)
+				rt.ProcessPID = 0
+				clearRecovery(&rt)
+				runtimeMap[s.WorkerID] = rt
+				runtimeDirty = true
+				s.ProcessStatus = "stopped"
+				s.TaskStatus = "idle"
+				s.State = "idle"
+				s.Reason = "retired-one-shot"
+				s.Activity = "retired"
+			}
+		}
+		if runtimeDirty {
+			if err := saveWorkerRuntimeMap(cfg.ProjectRoot, runtimeMap); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to save worker runtime map: %v\n", err)
+			}
+		}
 		return statuses, nil
 	}
 
@@ -2683,6 +3005,8 @@ func collectProcessStatuses(cfg Config) ([]WorkerStatus, error) {
 			WorkerID:  wid,
 			Role:      wr.Role,
 			Pane:      wr.Index,
+			ProcessStatus: "stopped",
+			TaskStatus:    "idle",
 			Provider:  firstNonEmpty(strings.TrimSpace(roleCfg.Provider), strings.TrimSpace(rt.Provider)),
 			Model:     firstNonEmpty(strings.TrimSpace(roleCfg.Model), "-"),
 			Effort:    firstNonEmpty(strings.TrimSpace(roleCfg.Effort), "-"),
@@ -2695,10 +3019,13 @@ func collectProcessStatuses(cfg Config) ([]WorkerStatus, error) {
 			st.Provider = "codex"
 		}
 		provider := normalizeProvider(st.Provider)
-		if provider == "cc" && strings.TrimSpace(rt.SessionID) != "" && strings.TrimSpace(rt.TranscriptPath) == "" {
-			rt.TranscriptPath = claudeWorkerTranscriptPath(cfg.ProjectRoot, rt.SessionID)
-			workersRuntime[wid] = rt
-			runtimeDirty = true
+		if provider == "cc" && strings.TrimSpace(rt.SessionID) != "" {
+			expected := claudeWorkerTranscriptPath(cfg.ProjectRoot, rt.SessionID)
+			if strings.TrimSpace(rt.TranscriptPath) != strings.TrimSpace(expected) {
+				rt.TranscriptPath = expected
+				workersRuntime[wid] = rt
+				runtimeDirty = true
+			}
 		}
 		if provider == "codex" {
 			if strings.TrimSpace(rt.TranscriptPath) == "" {
@@ -2727,28 +3054,27 @@ func collectProcessStatuses(cfg Config) ([]WorkerStatus, error) {
 			st.BeadTitle = b.Title
 			st.Label = firstNeedsLabel(b.Labels)
 		}
-		if pidAlive {
-			if strings.TrimSpace(st.BeadID) != "" {
-				st.State = "busy"
-				st.Reason = "process-running"
-			} else {
-				st.State = "ready"
-				st.Reason = "process-running"
-			}
-		} else if strings.TrimSpace(st.BeadID) != "" {
-			st.State = "waiting"
-			st.Reason = "assigned-no-process"
-		}
 		if p := strings.TrimSpace(rt.ProcessLogPath); p != "" {
+			st.LogPath = expandHome(p)
 			if info, err := os.Stat(expandHome(p)); err == nil {
 				st.ActivityAge = sinceSafe(info.ModTime())
 			}
 		}
+		if provider == "codex" && strings.TrimSpace(st.LogPath) != "" {
+			if threadID := extractCodexThreadIDFromLog(st.LogPath); threadID != "" && !strings.EqualFold(strings.TrimSpace(rt.SessionID), threadID) {
+				rt.SessionID = threadID
+				workersRuntime[wid] = rt
+				runtimeDirty = true
+			}
+		}
+		st.ResumeID = strings.TrimSpace(rt.SessionID)
 		if p := strings.TrimSpace(rt.TranscriptPath); p != "" {
+			st.TranscriptPath = expandHome(p)
 			if info, err := os.Stat(expandHome(p)); err == nil {
 				st.TranscriptAge = sinceSafe(info.ModTime())
 			}
 		}
+		applyProcessTaskState(&st, pidAlive)
 		st.Activity = buildActivity(st)
 		rows = append(rows, st)
 	}
@@ -2773,8 +3099,14 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 	if isProcessBackend(cfg) {
 		return collectProcessStatuses(cfg)
 	}
+	if !allSessions && strings.TrimSpace(cfg.Session) != "" && !tmuxSessionExists(cfg.Session) {
+		return []WorkerStatus{}, nil
+	}
 	panes, err := listPanes(cfg.Session, allSessions)
 	if err != nil {
+		if isBenignTmuxListError(err) {
+			return []WorkerStatus{}, nil
+		}
 		return nil, err
 	}
 
@@ -2845,6 +3177,9 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 			if roleCfg.Effort != "" {
 				st.Effort = roleCfg.Effort
 			}
+		}
+		if rt, ok := runtimeMap[st.WorkerID]; ok {
+			st.ResumeID = strings.TrimSpace(rt.SessionID)
 		}
 
 		if shellCommands[strings.ToLower(p.CurrentCommand)] {
@@ -3019,6 +3354,92 @@ func collectStatuses(cfg Config, allSessions bool) ([]WorkerStatus, error) {
 		return rows[i].Pane < rows[j].Pane
 	})
 	return rows, nil
+}
+
+func applyProcessTaskState(st *WorkerStatus, pidAlive bool) {
+	if st == nil {
+		return
+	}
+	assigned := strings.TrimSpace(st.BeadID) != ""
+	if pidAlive {
+		st.ProcessStatus = "running"
+		if assigned {
+			st.TaskStatus = "working"
+			st.State = "busy"
+			st.Reason = "process-running"
+		} else {
+			st.TaskStatus = "idle"
+			st.State = "ready"
+			st.Reason = "process-running"
+		}
+		return
+	}
+
+	st.ProcessStatus = "stopped"
+	if !assigned {
+		st.TaskStatus = "idle"
+		st.State = "idle"
+		st.Reason = "process-idle"
+		return
+	}
+
+	if msg := recentProcessError(st.LogPath); msg != "" {
+		st.ProcessStatus = "stopped"
+		st.TaskStatus = "blocked"
+		st.State = "blocked"
+		st.Reason = "launch-failed: " + msg
+		return
+	}
+
+	launchWindow := 25 * time.Second
+	if st.ActivityAge > 0 && st.ActivityAge <= launchWindow {
+		st.ProcessStatus = "launching"
+		st.TaskStatus = "assigned"
+		st.State = "waiting"
+		st.Reason = "launching"
+		return
+	}
+
+	st.ProcessStatus = "retrying"
+	st.TaskStatus = "assigned"
+	st.State = "waiting"
+	st.Reason = "assigned-no-process"
+}
+
+func recentProcessError(logPath string) string {
+	path := strings.TrimSpace(logPath)
+	if path == "" {
+		return ""
+	}
+	lines, err := tailTextFile(path, 20)
+	if err != nil || len(lines) == 0 {
+		return ""
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		low := strings.ToLower(l)
+		if strings.Contains(low, "error:") || strings.Contains(low, "already in use") || strings.Contains(low, "failed") {
+			return reduce(l, 120)
+		}
+	}
+	return ""
+}
+
+func isBenignTmuxListError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "can't find session") ||
+		strings.Contains(msg, "can't find window") ||
+		strings.Contains(msg, "can't find pane") ||
+		strings.Contains(msg, "can't find") ||
+		strings.Contains(msg, "no server running") ||
+		strings.Contains(msg, "failed to connect to server") ||
+		strings.Contains(msg, "no such file or directory")
 }
 
 func buildActivity(s WorkerStatus) string {
@@ -3799,6 +4220,19 @@ func isPIDAlive(pid int) bool {
 	return err == nil
 }
 
+func killProcessGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
+	// Process workers are launched with Setpgid=true; kill the whole group first.
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	time.Sleep(200 * time.Millisecond)
+	if isPIDAlive(pid) {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+}
+
 func startProcessWorkerPrompt(cfg Config, role RoleConfig, st WorkerStatus, prompt string, runtime map[string]WorkerRuntime) error {
 	rt := runtime[st.WorkerID]
 	if rt.ProcessPID > 0 && isPIDAlive(rt.ProcessPID) {
@@ -3810,8 +4244,12 @@ func startProcessWorkerPrompt(cfg Config, role RoleConfig, st WorkerStatus, prom
 	}
 	provider := normalizeProvider(firstNonEmpty(role.Provider, rt.Provider, st.Provider))
 	sessionID := strings.TrimSpace(rt.SessionID)
-	if provider == "cc" && sessionID == "" {
+	if provider == "cc" {
+		// Process-mode Claude workers are one-shot per launch: always use a fresh session.
 		sessionID = newUUIDv4()
+	} else if provider == "codex" {
+		// Codex resume id (thread_id) is discovered from JSONL events after launch.
+		sessionID = ""
 	}
 	cmdText := buildProcessLaunchCommand(role, sessionID, prompt)
 	logPath := processWorkerLogPath(cfg.ProjectRoot, cfg.RuntimeRunID, st.WorkerID)
@@ -5421,11 +5859,8 @@ func loadConfig(path string) (Config, error) {
 		cfg.Actor = defaultActor
 	}
 	cfg.RuntimeBackend = strings.ToLower(strings.TrimSpace(cfg.RuntimeBackend))
-	if cfg.RuntimeBackend == "" {
-		cfg.RuntimeBackend = "tmux"
-	}
-	if cfg.RuntimeBackend != "tmux" && cfg.RuntimeBackend != "process" {
-		cfg.RuntimeBackend = "tmux"
+	if cfg.RuntimeBackend == "" || cfg.RuntimeBackend != "process" {
+		cfg.RuntimeBackend = "process"
 	}
 	for i := range cfg.Roles {
 		cfg.Roles[i].PromptFile = expandHome(cfg.Roles[i].PromptFile)
@@ -5494,6 +5929,9 @@ func validateConfig(cfg Config) error {
 	}
 	if len(cfg.Roles) == 0 {
 		return errors.New("config.roles required")
+	}
+	if !strings.EqualFold(strings.TrimSpace(cfg.RuntimeBackend), "process") {
+		return errors.New("config.runtime_backend must be process")
 	}
 	seen := map[string]bool{}
 	for _, r := range cfg.Roles {
@@ -5581,6 +6019,46 @@ func runLogPath(projectRoot, runID string) string {
 	return filepath.Join(projectRoot, ".bsw", "runtime", "runs", id, "daemon-actions.jsonl")
 }
 
+func runLogExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
+func findLatestRunLog(projectRoot string) (string, string, bool) {
+	pattern := filepath.Join(projectRoot, ".bsw", "runtime", "runs", "*", "daemon-actions.jsonl")
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		return "", "", false
+	}
+	type candidate struct {
+		id      string
+		path    string
+		modTime time.Time
+	}
+	candidates := make([]candidate, 0, len(matches))
+	for _, p := range matches {
+		info, err := os.Stat(p)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		id := filepath.Base(filepath.Dir(p))
+		candidates = append(candidates, candidate{id: id, path: p, modTime: info.ModTime()})
+	}
+	if len(candidates) == 0 {
+		return "", "", false
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+	return candidates[0].id, candidates[0].path, true
+}
+
 func processWorkerLogPath(projectRoot, runID, workerID string) string {
 	id := strings.TrimSpace(runID)
 	if id == "" {
@@ -5640,7 +6118,14 @@ func ensureRunBinding(cfg *Config, createIfMissing bool) error {
 			}
 		}
 		reuseTmux := !isProcessBackend(*cfg) && tmuxSessionExists(meta.Session)
-		if reuseProcess || reuseTmux || !createIfMissing {
+		if !createIfMissing {
+			if reuseProcess || reuseTmux {
+				cfg.Session = strings.TrimSpace(meta.Session)
+				cfg.RuntimeRunID = strings.TrimSpace(meta.RunID)
+			}
+			return nil
+		}
+		if reuseProcess || reuseTmux {
 			cfg.Session = strings.TrimSpace(meta.Session)
 			cfg.RuntimeRunID = strings.TrimSpace(meta.RunID)
 			return nil
@@ -5852,6 +6337,26 @@ func shouldNudgeAssignedWorker(rt WorkerRuntime, now time.Time, cooldown time.Du
 	return now.Sub(last) >= cooldown
 }
 
+func shouldAttemptRecovery(rt WorkerRuntime, now time.Time, cooldown time.Duration) bool {
+	if cooldown <= 0 {
+		return true
+	}
+	last := parseRuntimeTime(rt.RecoverLastAt)
+	if last.IsZero() {
+		return true
+	}
+	return now.Sub(last) >= cooldown
+}
+
+func clearRecovery(rt *WorkerRuntime) {
+	if rt == nil {
+		return
+	}
+	rt.RecoverBeadID = ""
+	rt.RecoverAttempts = 0
+	rt.RecoverLastAt = ""
+}
+
 func shouldReleaseStuckAssignment(cfg Config, st WorkerStatus, bead Bead) bool {
 	if strings.TrimSpace(st.BeadID) == "" || st.State != "waiting" {
 		return false
@@ -5888,6 +6393,35 @@ func pickAssignableBeadForWorker(rt WorkerRuntime, queue []Bead, now time.Time, 
 		}
 	}
 	return Bead{}, queue
+}
+
+func removeBeadFromQueue(queue []Bead, beadID string) []Bead {
+	id := strings.TrimSpace(beadID)
+	if id == "" || len(queue) == 0 {
+		return queue
+	}
+	out := make([]Bead, 0, len(queue))
+	for _, b := range queue {
+		if strings.TrimSpace(b.ID) == id {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+func filterQueueReservedBeads(queue []Bead, reserved map[string]bool) []Bead {
+	if len(queue) == 0 || len(reserved) == 0 {
+		return queue
+	}
+	out := make([]Bead, 0, len(queue))
+	for _, b := range queue {
+		if reserved[strings.TrimSpace(b.ID)] {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 func canAssignBeadToWorker(rt WorkerRuntime, beadID string, now time.Time, cooldown time.Duration) bool {
@@ -6745,7 +7279,7 @@ func printStatusTable(rows []WorkerStatus) {
 		fmt.Println("no swarm panes found")
 		return
 	}
-	fmt.Printf("%-16s %-4s %-8s %-12s %-7s %-14s %-8s %-9s %-6s %-8s %-10s\n", "SESSION", "PANE", "ROLE", "AGENT", "STATE", "BEAD", "PROVIDER", "MODEL", "EFFORT", "DURATION", "ACTIVITY")
+	fmt.Printf("%-16s %-4s %-8s %-12s %-8s %-9s %-14s %-8s %-9s %-6s %-8s %-10s\n", "SESSION", "PANE", "ROLE", "AGENT", "PROC", "TASK", "BEAD", "PROVIDER", "MODEL", "EFFORT", "DURATION", "ACTIVITY")
 	for _, r := range rows {
 		bead := r.BeadID
 		if bead == "" {
@@ -6763,8 +7297,14 @@ func printStatusTable(rows []WorkerStatus) {
 		if effort == "" {
 			effort = "-"
 		}
-		fmt.Printf("%-16s %-4d %-8s %-12s %-7s %-14s %-8s %-9s %-6s %-8s %-10s\n",
-			r.Session, r.Pane, r.Role, agent, r.State, bead, r.Provider, model, effort, shortDur(r.Duration), shortActivity(r))
+		sid := sessionDisplayID(r)
+		if sid == "" {
+			sid = "-"
+		}
+		proc := blankDash(r.ProcessStatus)
+		task := blankDash(r.TaskStatus)
+		fmt.Printf("%-16s %-4d %-8s %-12s %-8s %-9s %-14s %-8s %-9s %-6s %-8s %-10s\n",
+			sid, r.Pane, r.Role, agent, proc, task, bead, r.Provider, model, effort, shortDur(r.Duration), shortActivity(r))
 	}
 }
 
@@ -7363,6 +7903,19 @@ type tuiModel struct {
 	expandedHistory map[string]bool
 	err             error
 	zoomTarget      *WorkerStatus
+	logWorkerID     string
+	logWorkerLabel  string
+	logWorkerSession string
+	logSourcePath   string
+	logLines        []string
+	logEntries      []workerLogEntry
+	logFollow       bool
+	logTop          int
+	logCursor       int
+	logExpanded     bool
+	logFocus        bool
+	rawFocus        bool
+	rawScroll       int
 	lastUpdated     time.Time
 	width           int
 	height          int
@@ -7379,6 +7932,9 @@ func newTUIModel(cfg Config, refresh time.Duration) tuiModel {
 		tickLog:         []string{},
 		showTickLog:     true,
 		expandedHistory: map[string]bool{},
+		logLines:        []string{},
+		logEntries:      []workerLogEntry{},
+		logFollow:       true,
 	}
 }
 
@@ -7433,8 +7989,22 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tab = (m.tab + 1) % 2
 		case "up", "k":
 			if m.tab == 0 {
+				if m.logWorkerID != "" && m.logExpanded && m.rawFocus {
+					if m.rawScroll > 0 {
+						m.rawScroll--
+					}
+					break
+				}
+				if m.logWorkerID != "" && m.logFocus {
+					if m.logCursor > 0 {
+						m.logFollow = false
+						m.logCursor--
+					}
+					break
+				}
 				if m.cursor > 0 {
 					m.cursor--
+					m.syncLogToSelectedWorker()
 				}
 			} else {
 				if m.lifecycleCursor > 0 {
@@ -7443,8 +8013,26 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if m.tab == 0 {
+				if m.logWorkerID != "" && m.logExpanded && m.rawFocus {
+					maxRaw := m.currentRawMaxScroll()
+					if m.rawScroll < maxRaw {
+						m.rawScroll++
+					}
+					break
+				}
+				if m.logWorkerID != "" && m.logFocus {
+					if m.logCursor < len(m.logEntries)-1 {
+						m.logFollow = false
+						m.logCursor++
+						if m.logCursor >= len(m.logEntries)-1 {
+							m.logFollow = true
+						}
+					}
+					break
+				}
 				if m.cursor < len(m.rows)-1 {
 					m.cursor++
+					m.syncLogToSelectedWorker()
 				}
 			} else {
 				if m.lifecycleCursor < len(m.lifecycleRows)-1 {
@@ -7453,10 +8041,49 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if m.tab == 0 {
+				if m.logWorkerID != "" {
+					if len(m.rows) > 0 && m.cursor < len(m.rows) {
+						sel := m.rows[m.cursor]
+						if !strings.EqualFold(strings.TrimSpace(m.logWorkerID), strings.TrimSpace(sel.WorkerID)) {
+							m.logWorkerID = sel.WorkerID
+							m.logWorkerLabel = shortWorkerName(sel.WorkerID)
+							m.logWorkerSession = sel.Session
+							m.logFollow = true
+							m.logTop = 0
+							m.logCursor = 0
+							m.logExpanded = false
+							m.logFocus = true
+							m.refreshWorkerLog()
+							break
+						}
+					}
+					if m.logFocus {
+						m.logExpanded = !m.logExpanded
+						if !m.logExpanded {
+							m.rawFocus = false
+							m.rawScroll = 0
+						}
+					} else {
+						// If logs are open and focus is on sessions, Enter should move into logs
+						// instead of closing them.
+						m.logFocus = true
+						m.rawFocus = false
+					}
+					break
+				}
 				if len(m.rows) > 0 && m.cursor < len(m.rows) {
 					sel := m.rows[m.cursor]
-					m.zoomTarget = &sel
-					return m, tea.Quit
+					m.logWorkerID = sel.WorkerID
+					m.logWorkerLabel = shortWorkerName(sel.WorkerID)
+					m.logWorkerSession = sel.Session
+					m.logFollow = true
+					m.logTop = 0
+					m.logCursor = 0
+					m.logExpanded = false
+					m.logFocus = true
+					m.rawFocus = false
+					m.rawScroll = 0
+					m.refreshWorkerLog()
 				}
 			} else {
 				if len(m.lifecycleRows) > 0 && m.lifecycleCursor < len(m.lifecycleRows) {
@@ -7464,11 +8091,86 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.expandedHistory[id] = !m.expandedHistory[id]
 				}
 			}
+		case "x":
+			if m.tab == 0 && m.logWorkerID != "" {
+				m.logWorkerID = ""
+				m.logWorkerLabel = ""
+				m.logWorkerSession = ""
+				m.logSourcePath = ""
+				m.logLines = []string{}
+				m.logEntries = []workerLogEntry{}
+				m.logFollow = true
+				m.logTop = 0
+				m.logCursor = 0
+				m.logExpanded = false
+				m.logFocus = false
+				m.rawFocus = false
+				m.rawScroll = 0
+			}
 		case "z":
 			if m.tab == 0 && len(m.rows) > 0 && m.cursor < len(m.rows) {
 				sel := m.rows[m.cursor]
 				m.zoomTarget = &sel
 				return m, tea.Quit
+			}
+		case "pgup", "ctrl+b":
+			if m.tab == 0 && m.logWorkerID != "" {
+				if m.logExpanded && m.rawFocus {
+					m.rawScroll = max(0, m.rawScroll-m.logPageSize())
+					break
+				}
+				m.logFollow = false
+				m.logCursor = max(0, m.logCursor-m.logPageSize())
+			}
+		case "pgdown", "ctrl+f":
+			if m.tab == 0 && m.logWorkerID != "" {
+				if m.logExpanded && m.rawFocus {
+					m.rawScroll = min(m.currentRawMaxScroll(), m.rawScroll+m.logPageSize())
+					break
+				}
+				m.logFollow = false
+				m.logCursor = min(max(0, len(m.logEntries)-1), m.logCursor+m.logPageSize())
+			}
+		case "home":
+			if m.tab == 0 && m.logWorkerID != "" {
+				if m.logExpanded && m.rawFocus {
+					m.rawScroll = 0
+					break
+				}
+				m.logFollow = false
+				m.logCursor = 0
+			}
+		case "end":
+			if m.tab == 0 && m.logWorkerID != "" {
+				if m.logExpanded && m.rawFocus {
+					m.rawScroll = m.currentRawMaxScroll()
+					break
+				}
+				m.logFollow = true
+				m.logCursor = max(0, len(m.logEntries)-1)
+			}
+		case "a":
+			if m.tab == 0 && m.logWorkerID != "" {
+				m.logFollow = !m.logFollow
+			}
+		case "left", "h":
+			if m.tab == 0 && m.logWorkerID != "" {
+				if m.logExpanded && m.rawFocus {
+					m.rawFocus = false
+					m.logFocus = true
+					break
+				}
+				m.logFocus = false
+				m.rawFocus = false
+			}
+		case "right", "l":
+			if m.tab == 0 && m.logWorkerID != "" {
+				if m.logExpanded {
+					m.rawFocus = true
+					m.logFocus = true
+				} else {
+					m.logFocus = true
+				}
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -7479,8 +8181,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataMsg:
 		m.err = msg.Err
 		if msg.Err == nil {
-			m.tickLog = appendTickLogEntries(m.tickLog, buildTickLogLines(m.rows, msg.Rows))
-			m.rows = msg.Rows
+			displayRows := filterTUIRows(msg.Rows)
+			orderedRows := orderSessionRows(displayRows)
+			m.tickLog = appendTickLogEntries(m.tickLog, buildTickLogLines(m.rows, orderedRows))
+			m.rows = orderedRows
 			m.lifecycleRows = msg.LifecycleRows
 			if msg.BeadCounts != nil {
 				m.beadCounts = msg.BeadCounts
@@ -7497,10 +8201,83 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.lifecycleCursor >= len(m.lifecycleRows) {
 				m.lifecycleCursor = max(0, len(m.lifecycleRows)-1)
 			}
+			m.refreshWorkerLog()
 			m.lastUpdated = time.Now()
 		}
 	}
 	return m, nil
+}
+
+func (m *tuiModel) syncLogToSelectedWorker() {
+	if strings.TrimSpace(m.logWorkerID) == "" {
+		return
+	}
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return
+	}
+	sel := m.rows[m.cursor]
+	if strings.EqualFold(strings.TrimSpace(m.logWorkerID), strings.TrimSpace(sel.WorkerID)) {
+		return
+	}
+	m.logWorkerID = sel.WorkerID
+	m.logWorkerLabel = shortWorkerName(sel.WorkerID)
+	m.logWorkerSession = sel.Session
+	m.logCursor = 0
+	m.logExpanded = false
+	m.logFollow = true
+	m.rawFocus = false
+	m.rawScroll = 0
+	m.refreshWorkerLog()
+}
+
+func orderSessionRows(rows []WorkerStatus) []WorkerStatus {
+	active := make([]WorkerStatus, 0, len(rows))
+	finished := make([]WorkerStatus, 0, len(rows))
+	for _, r := range rows {
+		if isActiveWorkerRow(r) {
+			active = append(active, r)
+		} else {
+			finished = append(finished, r)
+		}
+	}
+	out := make([]WorkerStatus, 0, len(rows))
+	out = append(out, active...)
+	out = append(out, finished...)
+	return out
+}
+
+func isRunningWorkerRow(r WorkerStatus) bool {
+	return strings.EqualFold(strings.TrimSpace(r.ProcessStatus), "running")
+}
+
+func isActiveWorkerRow(r WorkerStatus) bool {
+	ps := strings.ToLower(strings.TrimSpace(r.ProcessStatus))
+	if ps == "running" || ps == "launching" || ps == "retrying" {
+		return true
+	}
+	ts := strings.ToLower(strings.TrimSpace(r.TaskStatus))
+	return ts == "working" || ts == "assigned"
+}
+
+func hasWorkerHistory(r WorkerStatus) bool {
+	if strings.TrimSpace(r.LogPath) != "" || strings.TrimSpace(r.TranscriptPath) != "" {
+		return true
+	}
+	return false
+}
+
+func filterTUIRows(rows []WorkerStatus) []WorkerStatus {
+	out := make([]WorkerStatus, 0, len(rows))
+	for _, r := range rows {
+		if isRunningWorkerRow(r) || hasWorkerHistory(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func isFinishedWorkerRow(r WorkerStatus) bool {
+	return !isActiveWorkerRow(r)
 }
 
 func (m tuiModel) View() string {
@@ -7510,9 +8287,415 @@ func (m tuiModel) View() string {
 	return m.viewSessions()
 }
 
+func (m *tuiModel) logPageSize() int {
+	if m.height <= 0 {
+		return 10
+	}
+	return max(5, m.height/6)
+}
+
+func (m *tuiModel) currentRawLines() []string {
+	if strings.TrimSpace(m.logWorkerID) == "" || m.logCursor < 0 || m.logCursor >= len(m.logEntries) {
+		return []string{}
+	}
+	raw := m.logEntries[m.logCursor].Raw
+	if m.logEntries[m.logCursor].IsJSON && strings.TrimSpace(m.logEntries[m.logCursor].Pretty) != "" {
+		raw = m.logEntries[m.logCursor].Pretty
+	}
+	return strings.Split(raw, "\n")
+}
+
+func (m *tuiModel) currentRawMaxScroll() int {
+	rawLines := m.currentRawLines()
+	if len(rawLines) == 0 {
+		return 0
+	}
+	height := m.height
+	if height <= 0 {
+		height = 40
+	}
+	bodyBudget := max(8, height-16)
+	maxRaw := max(1, bodyBudget-3)
+	return max(0, len(rawLines)-maxRaw)
+}
+
+func (m *tuiModel) refreshWorkerLog() {
+	if strings.TrimSpace(m.logWorkerID) == "" {
+		return
+	}
+	prevCursor := m.logCursor
+	prevRaw := ""
+	prevTime := ""
+	if !m.logFollow && prevCursor >= 0 && prevCursor < len(m.logEntries) {
+		prevRaw = strings.TrimSpace(m.logEntries[prevCursor].Raw)
+		prevTime = strings.TrimSpace(m.logEntries[prevCursor].Time)
+	}
+	row, ok := findWorkerByID(m.rows, m.logWorkerID)
+	if !ok {
+		m.logSourcePath = ""
+		m.logLines = []string{"(worker not visible in current view)"}
+		m.logEntries = []workerLogEntry{{Time: "-", Summary: "(worker not visible in current view)"}}
+		return
+	}
+	m.logWorkerLabel = shortWorkerName(row.WorkerID)
+	m.logWorkerSession = row.Session
+	candidates := []string{}
+	logPath := strings.TrimSpace(row.LogPath)
+	transcriptPath := strings.TrimSpace(row.TranscriptPath)
+	provider := normalizeProvider(strings.TrimSpace(row.Provider))
+	// Prefer transcript for Claude/Codex because it reflects live agent activity better
+	// than process stdout, which may only emit final result lines.
+	if provider == "cc" || provider == "codex" {
+		candidates = append(candidates, transcriptPath, logPath)
+	} else {
+		candidates = append(candidates, logPath, transcriptPath)
+	}
+	// If one source is clearly fresher, move it to the front.
+	if row.TranscriptAge > 0 && (row.ActivityAge <= 0 || row.TranscriptAge < row.ActivityAge) {
+		candidates = []string{transcriptPath, logPath}
+	}
+	seen := map[string]bool{}
+	ordered := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		ordered = append(ordered, c)
+	}
+	if len(ordered) == 0 {
+		m.logSourcePath = ""
+		m.logLines = []string{"(no log source)"}
+		m.logEntries = []workerLogEntry{{Time: "-", Summary: "(no log source)"}}
+		return
+	}
+	var (
+		lines   []string
+		source  string
+		lastErr error
+	)
+	for _, cand := range ordered {
+		readLines, err := tailTextFile(cand, 2000)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(readLines) == 0 {
+			// Try next source (e.g., process log empty, transcript active).
+			source = cand
+			lines = readLines
+			continue
+		}
+		source = cand
+		lines = readLines
+		break
+	}
+	m.logSourcePath = source
+	if len(lines) == 0 && lastErr != nil {
+		m.logLines = []string{fmt.Sprintf("(log read error: %v)", lastErr)}
+		m.logEntries = []workerLogEntry{{Time: "-", Summary: fmt.Sprintf("(log read error: %v)", lastErr)}}
+		return
+	}
+	if len(lines) == 0 {
+		m.logLines = []string{"(empty log)"}
+		m.logEntries = []workerLogEntry{{Time: "-", Summary: "(empty log)"}}
+		return
+	}
+	m.logLines = lines
+	m.logEntries = parseWorkerLogEntries(lines)
+	if n := len(m.logEntries); n > 0 && strings.TrimSpace(m.logEntries[n-1].Time) == "-" {
+		if info, err := os.Stat(source); err == nil {
+			m.logEntries[n-1].Time = info.ModTime().Local().Format("15:04:05")
+		}
+	}
+	if len(m.logEntries) == 0 {
+		m.logEntries = []workerLogEntry{{Time: "-", Summary: "(empty log)"}}
+	}
+	// In manual mode, keep cursor anchored to the same entry across refreshes.
+	if !m.logFollow {
+		if prevRaw != "" {
+			found := -1
+			for i := len(m.logEntries) - 1; i >= 0; i-- {
+				if strings.TrimSpace(m.logEntries[i].Raw) == prevRaw {
+					if prevTime == "" || strings.TrimSpace(m.logEntries[i].Time) == prevTime {
+						found = i
+						break
+					}
+				}
+			}
+			if found >= 0 {
+				m.logCursor = found
+			} else if prevCursor >= 0 {
+				m.logCursor = min(prevCursor, len(m.logEntries)-1)
+			}
+		} else if prevCursor >= 0 {
+			m.logCursor = min(prevCursor, len(m.logEntries)-1)
+		}
+	}
+	// If cursor is at tail, re-enable follow automatically.
+	if !m.logFollow && m.logCursor >= len(m.logEntries)-1 {
+		m.logFollow = true
+	}
+	if m.logFollow {
+		m.logCursor = max(0, len(m.logEntries)-1)
+	}
+	maxCursor := max(0, len(m.logEntries)-1)
+	if m.logCursor > maxCursor {
+		m.logCursor = maxCursor
+	}
+}
+
+func findWorkerByID(rows []WorkerStatus, workerID string) (WorkerStatus, bool) {
+	for _, r := range rows {
+		if strings.EqualFold(strings.TrimSpace(r.WorkerID), strings.TrimSpace(workerID)) {
+			return r, true
+		}
+	}
+	return WorkerStatus{}, false
+}
+
+func tailTextFile(path string, maxLines int) ([]string, error) {
+	if maxLines <= 0 {
+		maxLines = 200
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	lines := make([]string, 0, maxLines)
+	for sc.Scan() {
+		line := sc.Text()
+		lines = append(lines, line)
+		if len(lines) > maxLines {
+			lines = lines[1:]
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+func parseWorkerLogEntries(lines []string) []workerLogEntry {
+	entries := make([]workerLogEntry, 0, len(lines))
+	for _, line := range lines {
+		raw := strings.TrimRight(line, "\r")
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		entry := workerLogEntry{Time: "-", Summary: trimmed, Raw: raw}
+		var obj map[string]any
+		if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") && json.Unmarshal([]byte(trimmed), &obj) == nil {
+			entry.IsJSON = true
+			entry.Time = extractLogTimestamp(obj, raw)
+			entry.Summary = extractLogSummary(obj, raw)
+			var pretty bytes.Buffer
+			if err := json.Indent(&pretty, []byte(trimmed), "", "  "); err == nil {
+				entry.Pretty = pretty.String()
+			}
+			if entry.Pretty == "" {
+				entry.Pretty = trimmed
+			}
+		} else {
+			entry.Time = extractTimestampFromText(raw)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func extractCodexThreadIDFromLog(logPath string) string {
+	path := strings.TrimSpace(logPath)
+	if path == "" {
+		return ""
+	}
+	lines, err := tailTextFile(path, 4000)
+	if err != nil || len(lines) == 0 {
+		return ""
+	}
+	lastAny := ""
+	lastStarted := ""
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+			continue
+		}
+		tid := strings.TrimSpace(fmt.Sprint(obj["thread_id"]))
+		if tid == "" || tid == "<nil>" {
+			continue
+		}
+		lastAny = tid
+		if typ := strings.TrimSpace(fmt.Sprint(obj["type"])); strings.EqualFold(typ, "thread.started") {
+			lastStarted = tid
+		}
+	}
+	if lastStarted != "" {
+		return lastStarted
+	}
+	return lastAny
+}
+
+func extractLogSummary(obj map[string]any, fallback string) string {
+	keys := []string{"type", "event", "message", "status", "state", "role", "text"}
+	parts := make([]string, 0, 3)
+	for _, k := range keys {
+		if v, ok := obj[k]; ok {
+			if s := strings.TrimSpace(fmt.Sprint(v)); s != "" && s != "<nil>" {
+				parts = append(parts, fmt.Sprintf("%s=%s", k, s))
+			}
+		}
+		if len(parts) >= 3 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return reduce(strings.TrimSpace(fallback), 160)
+	}
+	return reduce(strings.Join(parts, " "), 160)
+}
+
+func extractLogTimestamp(obj map[string]any, fallback string) string {
+	for _, k := range []string{"timestamp", "time", "ts", "created_at"} {
+		if v, ok := obj[k]; ok {
+			if ts := normalizeTimestampValue(v); ts != "" {
+				return ts
+			}
+		}
+	}
+	if ts := findTimestampInAny(obj, 0); ts != "" {
+		return ts
+	}
+	return extractTimestampFromText(fallback)
+}
+
+func findTimestampInAny(v any, depth int) string {
+	if depth > 5 {
+		return ""
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		for k, vv := range t {
+			lk := strings.ToLower(strings.TrimSpace(k))
+			if strings.Contains(lk, "time") || strings.Contains(lk, "ts") || strings.Contains(lk, "created") || strings.Contains(lk, "updated") {
+				if ts := normalizeTimestampValue(vv); ts != "" {
+					return ts
+				}
+			}
+		}
+		for _, vv := range t {
+			if ts := findTimestampInAny(vv, depth+1); ts != "" {
+				return ts
+			}
+		}
+	case []any:
+		for _, vv := range t {
+			if ts := findTimestampInAny(vv, depth+1); ts != "" {
+				return ts
+			}
+		}
+	}
+	return ""
+}
+
+func normalizeTimestampValue(v any) string {
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return ""
+		}
+		if parsed, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			return parsed.Local().Format("15:04:05")
+		}
+		if parsed, err := time.Parse(time.RFC3339, s); err == nil {
+			return parsed.Local().Format("15:04:05")
+		}
+		return reduce(s, 12)
+	case float64:
+		sec := int64(t)
+		if sec > 0 {
+			return time.Unix(sec, 0).Local().Format("15:04:05")
+		}
+	case int64:
+		if t > 0 {
+			return time.Unix(t, 0).Local().Format("15:04:05")
+		}
+	case int:
+		if t > 0 {
+			return time.Unix(int64(t), 0).Local().Format("15:04:05")
+		}
+	}
+	return ""
+}
+
+func extractTimestampFromText(line string) string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 {
+		return "-"
+	}
+	trim := strings.TrimSpace(line)
+	if strings.HasPrefix(trim, "[") && len(trim) >= 10 {
+		if i := strings.Index(trim, "]"); i > 1 {
+			cand := trim[1:i]
+			if t, err := time.Parse("15:04:05", cand); err == nil {
+				return t.Format("15:04:05")
+			}
+		}
+	}
+	s := fields[0]
+	if len(fields) > 1 && strings.Contains(s, "T") && (strings.HasSuffix(fields[1], "Z") || strings.Contains(fields[1], "+") || strings.Contains(fields[1], "-")) {
+		s = s + " " + fields[1]
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return ts.Local().Format("15:04:05")
+	}
+	if ts, err := time.Parse(time.RFC3339, s); err == nil {
+		return ts.Local().Format("15:04:05")
+	}
+	// Try common "YYYY-MM-DD HH:MM:SS" style.
+	if len(strings.TrimSpace(line)) >= 19 {
+		prefix := strings.TrimSpace(line)[:19]
+		if ts, err := time.Parse("2006-01-02 15:04:05", prefix); err == nil {
+			return ts.Local().Format("15:04:05")
+		}
+	}
+	return "-"
+}
+
+func logTimeRel(entry workerLogEntry, sourcePath string) string {
+	if strings.TrimSpace(entry.Time) != "" && strings.TrimSpace(entry.Time) != "-" {
+		if t, err := time.Parse("15:04:05", strings.TrimSpace(entry.Time)); err == nil {
+			now := time.Now()
+			ts := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), t.Second(), 0, now.Location())
+			if now.Before(ts) {
+				return "-"
+			}
+			return shortDur(now.Sub(ts))
+		}
+	}
+	if info, err := os.Stat(strings.TrimSpace(sourcePath)); err == nil {
+		return shortDur(time.Since(info.ModTime()))
+	}
+	return "-"
+}
+
 func (m tuiModel) viewSessions() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	selectedRowBGStyle := lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("24"))
+	logSelectedBGStyle := lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("58"))
 
 	width := m.width
 	if width <= 0 {
@@ -7523,17 +8706,24 @@ func (m tuiModel) viewSessions() string {
 		height = 40
 	}
 	cols := fitTUIColumns(width, maxSessionCellWidth(m.rows), maxPaneNameCellWidth(m.rows))
-	// Keep tick log compact so worker table remains primary on regular terminal heights.
-	logHeight := clamp(max(3, height/5), 3, 8)
+	// Keep tick log very compact so worker/log rows remain readable.
+	logHeight := clamp(max(2, height/10), 2, 4)
 	if !m.showTickLog {
 		logHeight = 0
 	}
+	tickReserve := 0
+	if m.showTickLog {
+		tickReserve = logHeight + 3
+	}
+	inlineLogHeight := clamp(max(4, height/7), 4, 10)
 
 	var b strings.Builder
 	b.WriteString(renderTabStrip(0) + "\n")
 
+	errLines := 0
 	if m.err != nil {
 		b.WriteString(mutedStyle.Render("error: "+m.err.Error()) + "\n")
+		errLines = 1
 	}
 	statusLines := renderSystemStatusBlock(width, m.flowStages, m.lifecycle, m.beadCounts, m.beadTotal, m.planMeta, m.rows)
 	b.WriteString(headerStyle.Render(statusLines[0]) + "\n")
@@ -7541,12 +8731,17 @@ func (m tuiModel) viewSessions() string {
 	for _, ln := range statusLines[1:] {
 		b.WriteString(mutedStyle.Render(ln) + "\n")
 	}
+	if len(m.rows) > 0 && m.cursor >= 0 && m.cursor < len(m.rows) {
+		sel := m.rows[m.cursor]
+		b.WriteString(mutedStyle.Render(reduce("selected session(full): "+blankDash(sessionDisplayID(sel)), max(20, width-2))) + "\n")
+	}
 
 	header := strings.Join([]string{
 		padCell("SESSION", cols.Session),
 		padCell("PANE", cols.Pane),
 		padCell("PANE_NAME", cols.PaneName),
-		padCell("STATE", cols.State),
+		padCell("PROC", cols.Proc),
+		padCell("TASK", cols.Task),
 		padCell("BEAD", cols.Bead),
 		padCell("PROVIDER", cols.Provider),
 		padCell("MODEL", cols.Model),
@@ -7554,32 +8749,48 @@ func (m tuiModel) viewSessions() string {
 		padCell("DUR", cols.Duration),
 		padCell("ACTIVITY", cols.Activity),
 	}, " ")
-	b.WriteString(headerStyle.Render(header) + "\n")
-	b.WriteString(mutedStyle.Render(strings.Repeat("-", visibleLen(header))) + "\n")
-
-	// Reserve space for fixed tick log section at bottom.
-	staticTop := 2 + len(statusLines) + 3 // title+tab + status header/rule/lines + table header+rule
+	staticTop := 2 + len(statusLines) + errLines
 	footerLines := 2
-	maxRows := height - staticTop - logHeight - footerLines
-	if maxRows < 1 {
-		maxRows = 1
+	updatedReserve := 0
+	if !m.lastUpdated.IsZero() {
+		updatedReserve = 1
 	}
+	bodyBudget := height - staticTop - tickReserve - footerLines - updatedReserve - 3
+	if bodyBudget < 8 {
+		bodyBudget = 8
+	}
+	rowBudget := max(1, bodyBudget-2)
 	start := 0
-	if m.cursor >= maxRows {
-		start = m.cursor - maxRows + 1
+	if m.cursor >= rowBudget {
+		start = m.cursor - rowBudget + 1
 	}
 	if start < 0 {
 		start = 0
 	}
-	end := min(len(m.rows), start+maxRows)
+	end := min(len(m.rows), start+rowBudget)
 
+	bodyLines := []string{
+		headerStyle.Render(header),
+		mutedStyle.Render(strings.Repeat("-", visibleLen(header))),
+	}
 	if len(m.rows) == 0 {
-		b.WriteString(mutedStyle.Render("(no matching panes)") + "\n")
+		bodyLines = append(bodyLines, mutedStyle.Render("(no matching panes)"))
 	} else {
-		for i := start; i < end; i++ {
-			r := m.rows[i]
+		window := m.rows[start:end]
+		activeRows := make([]WorkerStatus, 0, len(window))
+		finishedRows := make([]WorkerStatus, 0, len(window))
+		for _, r := range window {
+			if isFinishedWorkerRow(r) {
+				finishedRows = append(finishedRows, r)
+			} else {
+				activeRows = append(activeRows, r)
+			}
+		}
+		bodyLines = append(bodyLines, headerStyle.Render(fmt.Sprintf("active (%d)", len(activeRows))))
+		for _, r := range activeRows {
+			selected := m.cursor < len(m.rows) && strings.EqualFold(strings.TrimSpace(m.rows[m.cursor].WorkerID), strings.TrimSpace(r.WorkerID))
 			prefix := "  "
-			if i == m.cursor {
+			if selected {
 				prefix = "> "
 			}
 			bead := r.BeadID
@@ -7587,10 +8798,11 @@ func (m tuiModel) viewSessions() string {
 				bead = "-"
 			}
 			line := strings.Join([]string{
-				padCell(r.Session, cols.Session),
+				padCell(sessionDisplayID(r), cols.Session),
 				padCell(strconv.Itoa(r.Pane), cols.Pane),
 				padCell(shortWorkerName(r.WorkerID), cols.PaneName),
-				padCell(r.State, cols.State),
+				padCell(blankDash(r.ProcessStatus), cols.Proc),
+				padCell(blankDash(r.TaskStatus), cols.Task),
 				padCell(bead, cols.Bead),
 				padCell(r.Provider, cols.Provider),
 				padCell(r.Model, cols.Model),
@@ -7600,19 +8812,204 @@ func (m tuiModel) viewSessions() string {
 			}, " ")
 			rowTheme := roleThemeFor(r.Role)
 			square := lipgloss.NewStyle().Foreground(rowTheme.RowBG).Render("■")
-			b.WriteString(prefix + square + " " + line + "\n")
+			row := prefix + square + " " + line
+			if selected {
+				row = selectedRowBGStyle.Width(max(8, width-1)).Render(padCell(reduce(row, max(8, width-2)), max(8, width-1)))
+			}
+			bodyLines = append(bodyLines, row)
+			if selected && strings.EqualFold(strings.TrimSpace(m.logWorkerID), strings.TrimSpace(r.WorkerID)) {
+				entries := m.logEntries
+				if len(entries) == 0 {
+					entries = []workerLogEntry{{Time: "-", Summary: "(empty log)", Raw: "(empty log)"}}
+				}
+				if m.logFollow {
+					m.logCursor = max(0, len(entries)-1)
+				}
+				m.logCursor = min(max(0, m.logCursor), max(0, len(entries)-1))
+				startLog := 0
+				if m.logCursor >= inlineLogHeight {
+					startLog = m.logCursor - inlineLogHeight + 1
+				}
+				if startLog < 0 {
+					startLog = 0
+				}
+				endLog := min(len(entries), startLog+inlineLogHeight)
+				bodyLines = append(bodyLines, mutedStyle.Render("    logs: "+blankDash(m.logWorkerLabel)+" | "+map[bool]string{true: "follow", false: "manual"}[m.logFollow]))
+				bodyLines = append(bodyLines, mutedStyle.Render("    "+reduce(blankDash(m.logSourcePath), max(20, width-6))))
+				bodyLines = append(bodyLines, mutedStyle.Render("    TIME     REL    EVENT                         RAW"))
+				bodyLines = append(bodyLines, mutedStyle.Render("    "+strings.Repeat("-", min(max(20, width-6), 64))))
+				eventW := max(18, min(34, width/4))
+				rawW := max(12, width-30-eventW)
+				for i := startLog; i < endLog; i++ {
+					lp := "      "
+					if i == m.logCursor {
+						lp = "    > "
+					}
+					raw := strings.Join(strings.Fields(entries[i].Raw), " ")
+					line := fmt.Sprintf("%s%-8s %-*s | %-*s",
+						lp,
+						fmt.Sprintf("%-8s %-6s", blankDash(entries[i].Time), logTimeRel(entries[i], m.logSourcePath)),
+						eventW, reduce(entries[i].Summary, eventW),
+						rawW, reduce(raw, rawW),
+					)
+					line = reduce(line, max(20, width-2))
+					if i == m.logCursor {
+						line = logSelectedBGStyle.Width(max(8, width-1)).Render(padCell(line, max(8, width-1)))
+					}
+					bodyLines = append(bodyLines, line)
+				}
+				if endLog < len(entries) {
+					bodyLines = append(bodyLines, mutedStyle.Render(fmt.Sprintf("    ... +%d more log lines", len(entries)-endLog)))
+				}
+			}
+		}
+		bodyLines = append(bodyLines, headerStyle.Render(fmt.Sprintf("finished (%d)", len(finishedRows))))
+		for _, r := range finishedRows {
+			selected := m.cursor < len(m.rows) && strings.EqualFold(strings.TrimSpace(m.rows[m.cursor].WorkerID), strings.TrimSpace(r.WorkerID))
+			prefix := "  "
+			if selected {
+				prefix = "> "
+			}
+			bead := r.BeadID
+			if bead == "" {
+				bead = "-"
+			}
+			line := strings.Join([]string{
+				padCell(sessionDisplayID(r), cols.Session),
+				padCell(strconv.Itoa(r.Pane), cols.Pane),
+				padCell(shortWorkerName(r.WorkerID), cols.PaneName),
+				padCell(blankDash(r.ProcessStatus), cols.Proc),
+				padCell(blankDash(r.TaskStatus), cols.Task),
+				padCell(bead, cols.Bead),
+				padCell(r.Provider, cols.Provider),
+				padCell(r.Model, cols.Model),
+				padCell(r.Effort, cols.Effort),
+				padCell(shortDur(r.Duration), cols.Duration),
+				padCell(r.Activity, cols.Activity),
+			}, " ")
+			rowTheme := roleThemeFor(r.Role)
+			square := lipgloss.NewStyle().Foreground(rowTheme.RowBG).Render("■")
+			row := prefix + square + " " + line
+			if selected {
+				row = selectedRowBGStyle.Width(max(8, width-1)).Render(padCell(reduce(row, max(8, width-2)), max(8, width-1)))
+			}
+			bodyLines = append(bodyLines, row)
+			if selected && strings.EqualFold(strings.TrimSpace(m.logWorkerID), strings.TrimSpace(r.WorkerID)) {
+				entries := m.logEntries
+				if len(entries) == 0 {
+					entries = []workerLogEntry{{Time: "-", Summary: "(empty log)", Raw: "(empty log)"}}
+				}
+				if m.logFollow {
+					m.logCursor = max(0, len(entries)-1)
+				}
+				m.logCursor = min(max(0, m.logCursor), max(0, len(entries)-1))
+				startLog := 0
+				if m.logCursor >= inlineLogHeight {
+					startLog = m.logCursor - inlineLogHeight + 1
+				}
+				if startLog < 0 {
+					startLog = 0
+				}
+				endLog := min(len(entries), startLog+inlineLogHeight)
+				bodyLines = append(bodyLines, mutedStyle.Render("    logs: "+blankDash(m.logWorkerLabel)+" | "+map[bool]string{true: "follow", false: "manual"}[m.logFollow]))
+				bodyLines = append(bodyLines, mutedStyle.Render("    "+reduce(blankDash(m.logSourcePath), max(20, width-6))))
+				bodyLines = append(bodyLines, mutedStyle.Render("    TIME     REL    EVENT                         RAW"))
+				bodyLines = append(bodyLines, mutedStyle.Render("    "+strings.Repeat("-", min(max(20, width-6), 64))))
+				eventW := max(18, min(34, width/4))
+				rawW := max(12, width-30-eventW)
+				for i := startLog; i < endLog; i++ {
+					lp := "      "
+					if i == m.logCursor {
+						lp = "    > "
+					}
+					raw := strings.Join(strings.Fields(entries[i].Raw), " ")
+					line := fmt.Sprintf("%s%-8s %-*s | %-*s",
+						lp,
+						fmt.Sprintf("%-8s %-6s", blankDash(entries[i].Time), logTimeRel(entries[i], m.logSourcePath)),
+						eventW, reduce(entries[i].Summary, eventW),
+						rawW, reduce(raw, rawW),
+					)
+					line = reduce(line, max(20, width-2))
+					if i == m.logCursor {
+						line = logSelectedBGStyle.Width(max(8, width-1)).Render(padCell(line, max(8, width-1)))
+					}
+					bodyLines = append(bodyLines, line)
+				}
+				if endLog < len(entries) {
+					bodyLines = append(bodyLines, mutedStyle.Render(fmt.Sprintf("    ... +%d more log lines", len(entries)-endLog)))
+				}
+			}
 		}
 		if end < len(m.rows) {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("... +%d more rows (use j/k)", len(m.rows)-end)) + "\n")
+			bodyLines = append(bodyLines, mutedStyle.Render(fmt.Sprintf("... +%d more rows (use j/k)", len(m.rows)-end)))
+		}
+	}
+
+	if len(bodyLines) > bodyBudget {
+		bodyLines = append(bodyLines[:max(0, bodyBudget-1)], mutedStyle.Render("..."))
+	}
+	for len(bodyLines) < bodyBudget {
+		bodyLines = append(bodyLines, "")
+	}
+
+	if m.logExpanded && strings.TrimSpace(m.logWorkerID) != "" && m.logCursor >= 0 && m.logCursor < len(m.logEntries) {
+		rightW := max(36, width/3)
+		leftW := max(24, width-rightW-3)
+		if leftW+rightW+3 > width {
+			rightW = max(30, width-leftW-3)
+		}
+		leftClipped := make([]string, 0, len(bodyLines))
+		for _, ln := range bodyLines {
+			leftClipped = append(leftClipped, reduce(ln, max(8, leftW-1)))
+		}
+		raw := m.logEntries[m.logCursor].Raw
+		if m.logEntries[m.logCursor].IsJSON && strings.TrimSpace(m.logEntries[m.logCursor].Pretty) != "" {
+			raw = m.logEntries[m.logCursor].Pretty
+		}
+		rightLines := []string{
+			headerStyle.Render(reduce("log raw | "+blankDash(m.logWorkerLabel)+" | focus="+map[bool]string{true: "raw", false: "log"}[m.rawFocus], rightW-1)),
+			mutedStyle.Render(reduce(blankDash(m.logSourcePath), rightW-1)),
+			mutedStyle.Render(strings.Repeat("-", max(20, min(rightW-1, 64)))),
+		}
+		rawLines := strings.Split(raw, "\n")
+		maxRaw := max(1, bodyBudget-3)
+		if m.rawScroll < 0 {
+			m.rawScroll = 0
+		}
+		maxScroll := max(0, len(rawLines)-maxRaw)
+		if m.rawScroll > maxScroll {
+			m.rawScroll = maxScroll
+		}
+		startRaw := m.rawScroll
+		endRaw := min(len(rawLines), startRaw+maxRaw)
+		for _, ln := range rawLines[startRaw:endRaw] {
+			rightLines = append(rightLines, reduce(ln, rightW-1))
+		}
+		if endRaw < len(rawLines) {
+			rightLines = append(rightLines, mutedStyle.Render(reduce(fmt.Sprintf("... +%d more raw lines", len(rawLines)-endRaw), rightW-1)))
+		}
+		for len(rightLines) < bodyBudget {
+			rightLines = append(rightLines, "")
+		}
+		leftBlock := lipgloss.NewStyle().Width(leftW).MaxWidth(leftW).Render(strings.Join(leftClipped, "\n"))
+		rightBlock := lipgloss.NewStyle().Width(rightW).MaxWidth(rightW).Background(lipgloss.Color("236")).Render(strings.Join(rightLines, "\n"))
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftBlock, " | ", rightBlock) + "\n")
+	} else {
+		for _, ln := range bodyLines {
+			b.WriteString(ln + "\n")
 		}
 	}
 
 	b.WriteString("\n")
+	if len(m.rows) > 0 && m.cursor >= 0 && m.cursor < len(m.rows) {
+		sel := m.rows[m.cursor]
+		b.WriteString(mutedStyle.Render(reduce("selected session: "+blankDash(sessionDisplayID(sel)), max(20, width-2))) + "\n")
+	}
 	b.WriteString(renderRoleLegendLine() + "\n")
-	b.WriteString(renderKeysLine(width, "tab switch view, up/down (j/k) move, Enter/z zoom, r refresh, t toggle-log, q quit") + "\n")
+	b.WriteString(renderKeysLine(width, "tab switch view, up/down (j/k) move, Enter open logs/toggle raw, left/right session-log-raw focus, x close logs, PgUp/PgDn/Home/End log/raw nav, a log follow, z zoom, r refresh, t toggle-log, q quit") + "\n")
 	if m.showTickLog {
 		b.WriteString("\n")
-		b.WriteString(renderTickLogBlock(width, visibleLen(header), m.tickLog, logHeight-2))
+		b.WriteString(renderTickLogBlock(width, visibleLen(header), m.tickLog, logHeight))
 	}
 	if !m.lastUpdated.IsZero() {
 		b.WriteString("\n" + mutedStyle.Render("updated: "+m.lastUpdated.Format("15:04:05")) + "\n")
@@ -7632,7 +9029,7 @@ func (m tuiModel) viewLifecycle() string {
 	if height <= 0 {
 		height = 40
 	}
-	logHeight := clamp(max(3, height/6), 3, 8)
+	logHeight := clamp(max(2, height/10), 2, 4)
 	if !m.showTickLog {
 		logHeight = 0
 	}
@@ -7932,12 +9329,20 @@ func shortWorkerName(workerID string) string {
 	return s
 }
 
+func sessionDisplayID(s WorkerStatus) string {
+	if v := strings.TrimSpace(s.ResumeID); v != "" {
+		return v
+	}
+	return "-"
+}
+
 type tuiColumns struct {
 	Session  int
 	Pane     int
 	PaneName int
 	Agent    int
-	State    int
+	Proc     int
+	Task     int
 	Bead     int
 	Provider int
 	Model    int
@@ -7954,7 +9359,8 @@ func fitTUIColumns(total int, minSession int, minPaneName int) tuiColumns {
 		Pane:     4,
 		PaneName: 14,
 		Agent:    0,
-		State:    8,
+		Proc:     7,
+		Task:     8,
 		Provider: 6,
 		Effort:   6,
 		Duration: 6,
@@ -7962,30 +9368,36 @@ func fitTUIColumns(total int, minSession int, minPaneName int) tuiColumns {
 	if minPaneName > cols.PaneName {
 		cols.PaneName = minPaneName
 	}
-	fixed := cols.Pane + cols.PaneName + cols.State + cols.Provider + cols.Effort + cols.Duration
+	fixed := cols.Pane + cols.PaneName + cols.Proc + cols.Task + cols.Provider + cols.Effort + cols.Duration
 	remaining := total - fixed - 16
 	if remaining < 40 {
 		remaining = 40
 	}
-	// Prioritize full session visibility over model/activity when space is tight.
-	cols.Session = clamp(remaining*40/100, 16, 64)
-	if minSession > cols.Session {
-		cols.Session = minSession
-	}
-	cols.Bead = clamp(remaining*16/100, 8, 20)
-	cols.Model = clamp(remaining*16/100, 8, 18)
+	// Always prefer full session id visibility.
+	cols.Session = max(16, minSession)
+	cols.Bead = clamp(remaining*16/100, 6, 20)
+	cols.Model = clamp(remaining*16/100, 6, 18)
 	cols.Activity = remaining - cols.Session - cols.Bead - cols.Model
-	if cols.Activity < 10 {
-		need := 10 - cols.Activity
-		take := min(need, cols.Model-8)
+	if cols.Activity < 0 {
+		// Rebalance from less critical columns first.
+		need := -cols.Activity
+		take := min(need, cols.Model-4)
 		cols.Model -= take
 		need -= take
-		take = min(need, cols.Bead-8)
+		take = min(need, cols.Bead-4)
 		cols.Bead -= take
 		need -= take
-		take = min(need, cols.Session-16)
-		cols.Session -= take
-		cols.Activity = 10
+		// Keep session fully visible; activity can collapse to 0.
+		cols.Activity = max(0, remaining-cols.Session-cols.Bead-cols.Model)
+	}
+	if cols.Activity < 4 {
+		need := 4 - cols.Activity
+		take := min(need, cols.Model-4)
+		cols.Model -= take
+		need -= take
+		take = min(need, cols.Bead-4)
+		cols.Bead -= take
+		cols.Activity = max(0, remaining-cols.Session-cols.Bead-cols.Model)
 	}
 	return cols
 }
@@ -7993,7 +9405,7 @@ func fitTUIColumns(total int, minSession int, minPaneName int) tuiColumns {
 func maxSessionCellWidth(rows []WorkerStatus) int {
 	w := visibleLen("SESSION")
 	for _, r := range rows {
-		w = max(w, visibleLen(strings.TrimSpace(r.Session)))
+		w = max(w, visibleLen(strings.TrimSpace(sessionDisplayID(r))))
 	}
 	return w
 }
