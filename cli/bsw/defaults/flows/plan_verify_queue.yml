@@ -1,0 +1,24 @@
+version: 1
+name: plan_verify_workers
+
+# ORCHESTRATOR: Run this queue AFTER all implementation queues have drained.
+# Precondition: no beads with needs-impl, needs-proof, or needs-review labels.
+# The worker checks if the plan was fully delivered and creates follow-up
+# beads (labeled needs-impl) if gaps are found.
+# If plan-verify:failed, re-run the implementation pipeline then re-verify.
+
+source:
+  label: needs-plan-verify
+
+workers:
+  count: 1
+  provider: claude
+  model: claude-opus-4
+  effort: high
+  prompt: prompts/plan_verify_prompt.md
+
+transitions:
+  "plan-verify:passed": plan-done
+  "plan-verify:failed": needs-plan-verify
+
+timeout: 2h
