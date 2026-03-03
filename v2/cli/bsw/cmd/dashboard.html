@@ -1,0 +1,1842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bsw v2 Dashboard</title>
+  <style>
+    :root {
+      --bg: #eef5fb;
+      --panel: #ffffff;
+      --ink: #0c1c2f;
+      --muted: #5a7087;
+      --line: #c5d5e6;
+      --strong-line: #97b4d1;
+      --accent: #0a7fa3;
+      --accent-2: #1d4ed8;
+      --good: #117a43;
+      --warn: #946200;
+      --bad: #b42318;
+      --radius: 14px;
+      --shadow: 0 14px 36px rgba(9, 25, 44, 0.11);
+      --canvas-bg: #f7fbff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 12%, rgba(84, 168, 255, 0.12), transparent 26%),
+        radial-gradient(circle at 92% 0%, rgba(15, 173, 136, 0.1), transparent 24%),
+        linear-gradient(180deg, #f7fbff 0%, var(--bg) 45%, #ecf3f9 100%);
+      font-family: "Sora", "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+
+    .app {
+      max-width: 1560px;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .topbar {
+      display: grid;
+      gap: 10px;
+      align-items: start;
+      grid-template-columns: minmax(340px, 1.2fr) minmax(420px, 1fr);
+    }
+
+    .title {
+      margin: 0;
+      font-size: 1.35rem;
+      line-height: 1.15;
+      letter-spacing: 0.01em;
+    }
+
+    .subtitle {
+      margin: 8px 0 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+      max-width: 98%;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: #f8fcff;
+      color: #254661;
+      border-radius: 999px;
+      font-size: 0.79rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      padding: 6px 11px;
+      white-space: nowrap;
+    }
+
+    .chip.status-running {
+      background: #e8f8ef;
+      border-color: #bbebd1;
+      color: #0c6b39;
+    }
+
+    .chip.status-error {
+      background: #ffecea;
+      border-color: #f5b8b3;
+      color: #8d1d17;
+    }
+
+    .chip.status-stopped {
+      background: #f3f6f9;
+      border-color: #d2dde8;
+      color: #51697f;
+    }
+
+    .chip.alert {
+      background: #fff3dc;
+      border-color: #f0d090;
+      color: #805800;
+    }
+
+    .chip.alert.pulse {
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(176, 118, 0, 0.4); }
+      70% { box-shadow: 0 0 0 8px rgba(176, 118, 0, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(176, 118, 0, 0); }
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      align-items: center;
+    }
+
+    button, select, input {
+      font: inherit;
+    }
+
+    .btn, .select, .input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      color: #23445f;
+      background: #f8fcff;
+      font-size: 0.86rem;
+    }
+
+    .btn {
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .btn.primary {
+      background: #def3ff;
+      border-color: #abd7ee;
+      color: #0d4b69;
+    }
+
+    .btn:disabled {
+      cursor: default;
+      opacity: 0.65;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tab-btn {
+      border: 1px solid var(--line);
+      background: #f8fcff;
+      color: #2f516c;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 0.86rem;
+      font-weight: 800;
+      cursor: pointer;
+      letter-spacing: 0.01em;
+    }
+
+    .tab-btn.active {
+      border-color: #9bc1ef;
+      background: #e4f1ff;
+      color: #0f3f7a;
+    }
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: grid;
+      gap: 14px;
+    }
+
+    .cards {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    }
+
+    .card {
+      border: 1px solid #d8e7f4;
+      border-radius: 11px;
+      padding: 10px;
+      background: #f9fcff;
+    }
+
+    .card .k {
+      color: var(--muted);
+      font-size: 0.73rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 700;
+    }
+
+    .card .v {
+      margin-top: 5px;
+      font-size: 1.18rem;
+      font-weight: 800;
+      line-height: 1.1;
+    }
+
+    .card .subv {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .grid-2 {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .grid-4 {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(280px, 1fr));
+    }
+
+    .split {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: minmax(520px, 1fr) minmax(460px, 1fr);
+    }
+
+    h2 {
+      margin: 0 0 11px;
+      font-size: 0.98rem;
+      color: #173e5d;
+      border-bottom: 2px solid #dceaf7;
+      padding-bottom: 8px;
+      letter-spacing: 0.01em;
+    }
+
+    .section-tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: -2px 0 10px;
+    }
+
+    .section-tools .input {
+      min-width: 180px;
+      background: #ffffff;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      max-height: 540px;
+      border: 1px solid #d9e7f4;
+      border-radius: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      background: #ffffff;
+      min-width: 100%;
+    }
+
+    th, td {
+      border-bottom: 1px solid #e6eef7;
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #f6fbff;
+      color: #536a80;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    th.static {
+      cursor: default;
+    }
+
+    tr.clickable {
+      cursor: pointer;
+    }
+
+    tr.clickable:hover {
+      background: #f3f9ff;
+    }
+
+    tr.selected {
+      background: #e6f2ff;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .b-active { background: #e5f0ff; border-color: #b8d2ff; color: #174f97; }
+    .b-waiting_input { background: #fff5df; border-color: #f2d69a; color: #8a6200; }
+    .b-idle { background: #e9f8f0; border-color: #bfe6cf; color: #0d6a3b; }
+    .b-blocked { background: #ffeceb; border-color: #f4b7b2; color: #8f1f19; }
+    .b-exited { background: #f2f6fa; border-color: #d1dce7; color: #5c7488; }
+    .b-unknown { background: #edf3f9; border-color: #d7e2ed; color: #5b7286; }
+
+    .b-needs-impl, .b-needs-proof, .b-needs-review {
+      background: #e9f5ff;
+      border-color: #b8d9f5;
+      color: #245b84;
+    }
+
+    .b-done {
+      background: #e9f8f0;
+      border-color: #bfe6cf;
+      color: #0d6a3b;
+    }
+
+    .b-failed, .b-error {
+      background: #ffeceb;
+      border-color: #f4b7b2;
+      color: #8f1f19;
+    }
+
+    .detail-panel {
+      min-height: 660px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .detail-grid {
+      display: grid;
+      gap: 7px 10px;
+      grid-template-columns: 132px 1fr;
+      font-size: 0.86rem;
+    }
+
+    .detail-grid .k {
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .mono {
+      font-family: "IBM Plex Mono", "Fira Mono", "Menlo", monospace;
+      font-size: 0.81rem;
+    }
+
+    .code {
+      border: 1px solid #d3e2f0;
+      border-radius: 8px;
+      padding: 8px;
+      background: #f6fbff;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 240px;
+      overflow: auto;
+      font-family: "IBM Plex Mono", "Fira Mono", "Menlo", monospace;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: #19344d;
+    }
+
+    .subtabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .subtab {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.79rem;
+      font-weight: 800;
+      color: #3a5670;
+      background: #f8fcff;
+      cursor: pointer;
+    }
+
+    .subtab.active {
+      border-color: #9bc1ef;
+      background: #e4f1ff;
+      color: #0f3f7a;
+    }
+
+    .subview {
+      display: none;
+    }
+
+    .subview.active {
+      display: block;
+    }
+
+    .timeline {
+      border: 1px solid #d5e4f2;
+      border-radius: 10px;
+      padding: 10px;
+      background: #f8fcff;
+      display: grid;
+      gap: 8px;
+    }
+
+    .gantt-row {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 140px 1fr 120px;
+      align-items: center;
+    }
+
+    .gantt-label {
+      font-size: 0.82rem;
+      font-weight: 800;
+      color: #194668;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .gantt-track {
+      position: relative;
+      height: 14px;
+      border-radius: 999px;
+      background: #dfeaf5;
+      overflow: hidden;
+    }
+
+    .gantt-bar {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #60a5fa 0%, #0ea5b7 100%);
+    }
+
+    .gantt-meta {
+      font-size: 0.79rem;
+      color: #4e667c;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .event-feed {
+      border: 1px solid #d5e4f2;
+      border-radius: 10px;
+      background: #ffffff;
+      max-height: 260px;
+      overflow: auto;
+    }
+
+    .event-item {
+      border-bottom: 1px solid #edf3f9;
+      padding: 7px 9px;
+      font-size: 0.82rem;
+      display: grid;
+      grid-template-columns: 84px 108px 1fr;
+      gap: 8px;
+      align-items: start;
+    }
+
+    .event-item:last-child {
+      border-bottom: 0;
+    }
+
+    .event-ts {
+      color: #60788f;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.76rem;
+      white-space: nowrap;
+    }
+
+    .event-kind {
+      font-weight: 800;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      color: #35546e;
+      letter-spacing: 0.04em;
+    }
+
+    .event-detail {
+      color: #24425b;
+      word-break: break-word;
+    }
+
+    .chart-panel {
+      border: 1px solid #d8e6f3;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fbfdff;
+      min-height: 226px;
+    }
+
+    .chart-title {
+      margin: 0 0 8px;
+      font-size: 0.83rem;
+      color: #31526e;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    canvas {
+      width: 100%;
+      height: 170px;
+      border: 1px solid #d9e7f4;
+      border-radius: 8px;
+      background: var(--canvas-bg);
+      display: block;
+    }
+
+    .legend {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 0.77rem;
+      color: #4f6981;
+    }
+
+    .legend-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      margin-right: 5px;
+      vertical-align: middle;
+    }
+
+    .dag-wrap {
+      border: 1px solid #d7e5f2;
+      border-radius: 11px;
+      background: #f9fcff;
+      min-height: 250px;
+      overflow: auto;
+      padding: 8px;
+    }
+
+    .dag-svg {
+      width: 100%;
+      min-width: 760px;
+      height: 280px;
+      display: block;
+    }
+
+    .dag-node rect {
+      fill: #ffffff;
+      stroke: #abc6de;
+      stroke-width: 1.5;
+      rx: 10;
+      ry: 10;
+    }
+
+    .dag-node text {
+      font-size: 12px;
+      fill: #1f425f;
+      font-weight: 800;
+    }
+
+    .dag-node .count {
+      font-size: 11px;
+      fill: #5b7187;
+      font-weight: 600;
+    }
+
+    .dag-node.source rect {
+      fill: #e9f4ff;
+      stroke: #7db0e6;
+    }
+
+    .dag-edge {
+      stroke: #6090b8;
+      stroke-width: 1.8;
+      fill: none;
+      marker-end: url(#arrowHead);
+    }
+
+    .dag-label {
+      font-size: 11px;
+      fill: #4f6c87;
+      font-weight: 800;
+    }
+
+    .kanban {
+      display: grid;
+      gap: 12px;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(250px, 1fr);
+      overflow: auto;
+    }
+
+    .kan-col {
+      border: 1px solid #d8e6f3;
+      border-radius: 10px;
+      background: #f9fcff;
+      min-height: 480px;
+      padding: 10px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+    }
+
+    .kan-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: #2f5674;
+      font-weight: 800;
+    }
+
+    .kan-card {
+      border: 1px solid #d1e1f0;
+      border-radius: 9px;
+      background: #ffffff;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .kan-card:hover {
+      border-color: #9dc2e3;
+      background: #f7fbff;
+    }
+
+    .kan-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: #163a56;
+      line-height: 1.32;
+    }
+
+    .kan-meta {
+      font-size: 0.75rem;
+      color: #5f778d;
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.84rem;
+      font-style: italic;
+      padding: 6px 4px;
+    }
+
+    @media (max-width: 1280px) {
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+      .controls {
+        justify-content: flex-start;
+      }
+      .split {
+        grid-template-columns: 1fr;
+      }
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+      .grid-4 {
+        grid-template-columns: 1fr;
+      }
+      .event-item {
+        grid-template-columns: 74px 100px 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="panel topbar">
+      <div>
+        <h1 class="title">bsw v2 Swarm Control Plane</h1>
+        <p class="subtitle" id="subtitle">loading status ...</p>
+        <div class="chips" id="headerChips"></div>
+      </div>
+      <div class="controls">
+        <label class="muted">Range</label>
+        <select class="select" id="rangeSelect">
+          <option value="1h">1h</option>
+          <option value="4h" selected>4h</option>
+          <option value="24h">24h</option>
+          <option value="7d">7d</option>
+        </select>
+        <label class="muted">Resolution</label>
+        <select class="select" id="resolutionSelect">
+          <option value="1m">1m</option>
+          <option value="5m" selected>5m</option>
+          <option value="15m">15m</option>
+          <option value="1h">1h</option>
+        </select>
+        <button class="btn" id="autoRefreshBtn">Auto Refresh: ON</button>
+        <button class="btn primary" id="refreshBtn">Refresh Now</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="agents">Agent Sessions</button>
+      <button class="tab-btn" data-tab="beads">Beads</button>
+      <button class="tab-btn" data-tab="kanban">Kanban</button>
+    </div>
+
+    <section class="view active" id="view-overview">
+      <div class="panel">
+        <h2>System Overview</h2>
+        <div class="cards" id="overviewCards"></div>
+      </div>
+      <div class="panel">
+        <h2>Time-Series Metrics</h2>
+        <div class="grid-4">
+          <div class="chart-panel">
+            <p class="chart-title">Queue Depth Over Time</p>
+            <canvas id="queueChart" width="640" height="220"></canvas>
+            <div class="legend" id="queueLegend"></div>
+          </div>
+          <div class="chart-panel">
+            <p class="chart-title">Agents Over Time</p>
+            <canvas id="agentChart" width="640" height="220"></canvas>
+            <div class="legend" id="agentLegend"></div>
+          </div>
+          <div class="chart-panel">
+            <p class="chart-title">Throughput And Failures</p>
+            <canvas id="throughputChart" width="640" height="220"></canvas>
+            <div class="legend" id="throughputLegend"></div>
+          </div>
+          <div class="chart-panel">
+            <p class="chart-title">Average Cycle Time (minutes)</p>
+            <canvas id="cycleChart" width="640" height="220"></canvas>
+            <div class="legend" id="cycleLegend"></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Queues</h2>
+          <div class="table-wrap" id="queuesTableWrap"></div>
+        </div>
+        <div class="panel">
+          <h2>Attention</h2>
+          <div class="table-wrap" id="attentionTableWrap"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>State Machine DAG</h2>
+        <div class="dag-wrap" id="dagWrap"></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-agents">
+      <div class="split">
+        <div class="panel">
+          <h2>Agent Sessions</h2>
+          <div class="section-tools">
+            <input class="input" id="agentSearch" placeholder="Search agent, bead, queue, provider">
+          </div>
+          <div class="table-wrap" id="agentsTableWrap"></div>
+        </div>
+        <div class="panel">
+          <h2>Selected Agent Session</h2>
+          <div class="detail-panel">
+            <div id="agentDetail"></div>
+            <div>
+              <div class="section-tools">
+                <label class="muted">Latest Logs (newest first)</label>
+              </div>
+              <div class="table-wrap" id="agentLogsTableWrap"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-beads">
+      <div class="split">
+        <div class="panel">
+          <h2>Beads</h2>
+          <div class="section-tools">
+            <input class="input" id="beadSearch" placeholder="Search bead id or title">
+            <select class="select" id="beadStateFilter">
+              <option value="all">All States</option>
+              <option value="active">Active</option>
+              <option value="waiting_input">Waiting</option>
+              <option value="blocked">Blocked</option>
+              <option value="idle">Idle</option>
+              <option value="exited">Exited</option>
+              <option value="done_like">Done/Review Label</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+          <div class="table-wrap" id="beadsTableWrap"></div>
+        </div>
+        <div class="panel">
+          <h2>Selected Bead</h2>
+          <div class="subtabs">
+            <button class="subtab active" data-subtab="details">Details</button>
+            <button class="subtab" data-subtab="history">History</button>
+            <button class="subtab" data-subtab="logs">Logs</button>
+          </div>
+          <div class="subview active" id="beadSubview-details"></div>
+          <div class="subview" id="beadSubview-history"></div>
+          <div class="subview" id="beadSubview-logs"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-kanban">
+      <div class="panel">
+        <h2>Kanban</h2>
+        <div class="kanban" id="kanbanWrap"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const appState = {
+      payload: null,
+      snapshot: null,
+      flowSummary: null,
+      metrics: null,
+      selectedTab: 'overview',
+      selectedBead: '',
+      selectedAgentBead: '',
+      beadDetail: null,
+      beadSubtab: 'details',
+      autoRefresh: true,
+      refreshMs: 3500,
+      range: '4h',
+      resolution: '5m',
+      agentSearch: '',
+      beadSearch: '',
+      beadStateFilter: 'all',
+      agentSort: { key: 'agent_name', dir: 'asc' },
+      beadSort: { key: 'bead_id', dir: 'asc' },
+      agentDetail: null,
+      agentLogs: null,
+      beadLogs: null,
+      timers: {
+        status: null,
+        logs: null,
+      },
+    };
+
+    function fmt(v) {
+      return v === null || v === undefined || v === '' ? '-' : String(v);
+    }
+
+    function esc(v) {
+      return String(v)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function badge(v) {
+      const raw = String(v || 'unknown').trim();
+      const cls = `b-${raw.replaceAll(/[^a-zA-Z0-9_-]/g, '-')}`;
+      return `<span class="badge ${cls}">${esc(raw || 'unknown')}</span>`;
+    }
+
+    function copyText(value) {
+      const s = String(value || '');
+      if (!s) return;
+      navigator.clipboard.writeText(s).catch(() => {});
+    }
+
+    function ago(ts) {
+      const t = Date.parse(ts || '');
+      if (!Number.isFinite(t)) return '-';
+      const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+      if (sec < 60) return `${sec}s ago`;
+      if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+      if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+      return `${Math.floor(sec / 86400)}d ago`;
+    }
+
+    function tsShort(ts) {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return fmt(ts);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+    }
+
+    function fmtDurationSeconds(sec) {
+      const s = Math.max(0, Math.floor(Number(sec) || 0));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const r = s % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${r}s`;
+      return `${r}s`;
+    }
+
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json();
+    }
+
+    function setTab(tab) {
+      appState.selectedTab = tab;
+      document.querySelectorAll('.tab-btn').forEach((el) => {
+        el.classList.toggle('active', el.dataset.tab === tab);
+      });
+      document.querySelectorAll('.view').forEach((el) => {
+        el.classList.toggle('active', el.id === `view-${tab}`);
+      });
+      if (tab === 'kanban') {
+        renderKanban(appState.snapshot || {});
+      }
+    }
+
+    function setBeadSubtab(name) {
+      appState.beadSubtab = name;
+      document.querySelectorAll('.subtab').forEach((el) => {
+        el.classList.toggle('active', el.dataset.subtab === name);
+      });
+      document.querySelectorAll('.subview').forEach((el) => {
+        el.classList.toggle('active', el.id === `beadSubview-${name}`);
+      });
+    }
+
+    function sortRows(rows, sort) {
+      const factor = sort.dir === 'asc' ? 1 : -1;
+      return [...rows].sort((a, b) => {
+        const av = String(a[sort.key] ?? '').toLowerCase();
+        const bv = String(b[sort.key] ?? '').toLowerCase();
+        if (av < bv) return -1 * factor;
+        if (av > bv) return 1 * factor;
+        return 0;
+      });
+    }
+
+    function toggleSort(current, key) {
+      if (current.key === key) {
+        return { key, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, dir: 'asc' };
+    }
+
+    function colorForIndex(i) {
+      const palette = ['#0a7fa3', '#1d4ed8', '#0ea57f', '#a26100', '#b42318', '#6d28d9', '#0f766e', '#be185d'];
+      return palette[i % palette.length];
+    }
+
+    function drawAxes(ctx, w, h, pad) {
+      ctx.strokeStyle = '#c7d8e9';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad, pad);
+      ctx.lineTo(pad, h - pad);
+      ctx.lineTo(w - pad, h - pad);
+      ctx.stroke();
+    }
+
+    function drawLineChart(canvasId, series, legendId) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      const pad = 28;
+      ctx.clearRect(0, 0, w, h);
+      drawAxes(ctx, w, h, pad);
+
+      const maxLen = Math.max(0, ...series.map((s) => s.values.length));
+      const allValues = series.flatMap((s) => s.values.map((p) => Number(p.y) || 0));
+      const maxY = Math.max(1, ...allValues);
+      const minY = 0;
+      const plotW = w - pad * 2;
+      const plotH = h - pad * 2;
+
+      for (let g = 0; g <= 4; g++) {
+        const gy = pad + (plotH * g / 4);
+        ctx.strokeStyle = '#e5eef8';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(pad, gy);
+        ctx.lineTo(w - pad, gy);
+        ctx.stroke();
+      }
+
+      series.forEach((s) => {
+        if (!s.values.length) return;
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        s.values.forEach((p, idx) => {
+          const x = pad + (maxLen <= 1 ? 0 : (idx / (maxLen - 1)) * plotW);
+          const yv = Number(p.y) || 0;
+          const y = pad + (1 - (yv - minY) / (maxY - minY)) * plotH;
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      });
+
+      ctx.fillStyle = '#5e768d';
+      ctx.font = '11px "IBM Plex Mono", monospace';
+      ctx.fillText(String(maxY), 6, pad + 4);
+      ctx.fillText('0', 10, h - pad + 3);
+
+      const legend = document.getElementById(legendId);
+      legend.innerHTML = series.map((s) =>
+        `<span><span class="legend-dot" style="background:${esc(s.color)}"></span>${esc(s.name)}</span>`
+      ).join('');
+    }
+
+    function drawBarChart(canvasId, rows, legendId) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      const pad = 28;
+      ctx.clearRect(0, 0, w, h);
+      drawAxes(ctx, w, h, pad);
+
+      const maxY = Math.max(1, ...rows.flatMap((r) => [Number(r.completed) || 0, Number(r.failed) || 0]));
+      const plotW = w - pad * 2;
+      const plotH = h - pad * 2;
+      const slot = rows.length ? plotW / rows.length : plotW;
+
+      rows.forEach((r, i) => {
+        const cx = pad + i * slot + slot / 2;
+        const cw = Math.max(2, slot * 0.34);
+        const done = Number(r.completed) || 0;
+        const fail = Number(r.failed) || 0;
+        const hDone = (done / maxY) * plotH;
+        const hFail = (fail / maxY) * plotH;
+
+        ctx.fillStyle = '#0a7fa3';
+        ctx.fillRect(cx - cw - 1, h - pad - hDone, cw, hDone);
+        ctx.fillStyle = '#b42318';
+        ctx.fillRect(cx + 1, h - pad - hFail, cw, hFail);
+      });
+
+      ctx.fillStyle = '#5e768d';
+      ctx.font = '11px "IBM Plex Mono", monospace';
+      ctx.fillText(String(maxY), 6, pad + 4);
+      ctx.fillText('0', 10, h - pad + 3);
+
+      document.getElementById(legendId).innerHTML = `
+        <span><span class="legend-dot" style="background:#0a7fa3"></span>Completed</span>
+        <span><span class="legend-dot" style="background:#b42318"></span>Failed</span>
+      `;
+    }
+
+    function renderHeader(payload) {
+      const snap = payload.snapshot || {};
+      const run = snap.run || {};
+      const attention = (snap.attention || []).length;
+      const chips = [
+        `<span class="chip">Run: ${esc(fmt(run.run_id))}</span>`,
+        `<span class="chip">Mode: ${esc(fmt(run.mode))}</span>`,
+        `<span class="chip status-${esc(String(run.status || '').toLowerCase())}">Status: ${esc(fmt(run.status))}</span>`,
+        `<span class="chip">Last Refresh: ${esc(tsShort(payload.server_time))}</span>`,
+        `<span class="chip">Beads: ${esc((snap.beads || []).length)}</span>`,
+        `<span class="chip">Agents: ${esc((snap.agents || []).length)}</span>`,
+        `<span class="chip alert ${attention > 0 ? 'pulse' : ''}">Attention: ${esc(attention)}</span>`,
+      ];
+      document.getElementById('headerChips').innerHTML = chips.join('');
+      document.getElementById('subtitle').textContent = `project: ${fmt(payload.project_root)} | flow: ${fmt(payload.resolved_flow)}`;
+      document.getElementById('autoRefreshBtn').textContent = `Auto Refresh: ${appState.autoRefresh ? 'ON' : 'OFF'}`;
+    }
+
+    function renderOverview() {
+      const snap = appState.snapshot || {};
+      const metrics = appState.metrics || {};
+      const queues = snap.queues || {};
+      const agents = snap.agents || [];
+      const attention = snap.attention || [];
+      const beads = snap.beads || [];
+      const queueDepth = Object.values(queues).reduce((acc, q) => acc + (Number(q.total) || 0), 0);
+      const activeAgents = agents.filter((a) => String(a.activity_state) === 'active').length;
+      const lastThroughput = (metrics.throughput || []).at(-1) || {};
+      const lastCycle = [...(metrics.cycle_times || [])].reverse().find((p) => Number(p.avg_minutes) > 0) || {};
+
+      const cards = [
+        ['Queue Depth', queueDepth, `unassigned ${Object.values(queues).reduce((acc, q) => acc + (Number(q.unassigned) || 0), 0)}`],
+        ['Agents Active', `${activeAgents}/${agents.length}`, `waiting ${(agents.filter((a) => a.activity_state === 'waiting_input').length)}`],
+        ['Throughput', Number(lastThroughput.completed || 0), 'beads/hour'],
+        ['Failed Beads', Number(lastThroughput.failed || 0), 'current hour'],
+        ['Cycle Time', Number(lastCycle.avg_minutes || 0) ? `${Number(lastCycle.avg_minutes).toFixed(1)}m` : '-', 'average'],
+        ['Attention', attention.length, attention.length > 0 ? 'action required' : 'healthy'],
+      ];
+      document.getElementById('overviewCards').innerHTML = cards.map(([k, v, sub]) => `
+        <div class="card">
+          <div class="k">${esc(k)}</div>
+          <div class="v">${esc(v)}</div>
+          <div class="subv">${esc(sub)}</div>
+        </div>
+      `).join('');
+
+      renderQueueTable(queues);
+      renderAttentionTable(attention, beads);
+      renderDag(snap, appState.flowSummary || {});
+      renderMetricCharts(metrics);
+    }
+
+    function renderQueueTable(queues) {
+      const names = Object.keys(queues || {}).sort();
+      if (!names.length) {
+        document.getElementById('queuesTableWrap').innerHTML = '<div class="empty">No queue data.</div>';
+        return;
+      }
+      const rows = names.map((name) => {
+        const q = queues[name] || {};
+        return `<tr>
+          <td>${badge(name)}</td>
+          <td>${esc(q.total)}</td>
+          <td>${esc(q.assigned)}</td>
+          <td>${esc(q.unassigned)}</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('queuesTableWrap').innerHTML = `
+        <table>
+          <thead><tr><th class="static">Queue</th><th class="static">Total</th><th class="static">Assigned</th><th class="static">Unassigned</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function renderAttentionTable(attention, beads) {
+      if (!attention.length) {
+        document.getElementById('attentionTableWrap').innerHTML = '<div class="empty">No attention items.</div>';
+        return;
+      }
+      const byID = Object.fromEntries((beads || []).map((b) => [b.bead_id, b]));
+      const rows = [...attention]
+        .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
+        .map((it) => {
+          const bead = byID[it.bead_id] || {};
+          return `<tr class="clickable" data-bead="${esc(it.bead_id)}">
+            <td>${esc(fmt(it.bead_id))}</td>
+            <td>${esc(fmt(bead.title || ''))}</td>
+            <td>${esc(fmt(it.reason))}</td>
+            <td>${esc(fmt(it.suggested_action))}</td>
+            <td class="mono">${esc(tsShort(it.at))}</td>
+          </tr>`;
+        }).join('');
+      document.getElementById('attentionTableWrap').innerHTML = `
+        <table>
+          <thead><tr><th class="static">Bead</th><th class="static">Title</th><th class="static">Reason</th><th class="static">Action</th><th class="static">At</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      document.querySelectorAll('#attentionTableWrap tr.clickable').forEach((row) => {
+        row.addEventListener('click', () => {
+          appState.selectedBead = row.dataset.bead;
+          setTab('beads');
+          renderBeads();
+          loadBeadDetail();
+        });
+      });
+    }
+
+    function renderMetricCharts(metrics) {
+      const queueSeries = [];
+      const queueMap = metrics.queues || {};
+      Object.keys(queueMap).sort().forEach((label, i) => {
+        const values = (queueMap[label] || []).map((p) => ({ y: Number(p.total) || 0 }));
+        if (values.length) {
+          queueSeries.push({ name: label, color: colorForIndex(i), values });
+        }
+      });
+      drawLineChart('queueChart', queueSeries, 'queueLegend');
+
+      const agentRows = metrics.agents || [];
+      const agentSeries = [
+        { name: 'active', color: '#1d4ed8', values: agentRows.map((p) => ({ y: Number(p.active) || 0 })) },
+        { name: 'waiting_input', color: '#a26100', values: agentRows.map((p) => ({ y: Number(p.waiting_input) || 0 })) },
+        { name: 'blocked', color: '#b42318', values: agentRows.map((p) => ({ y: Number(p.blocked) || 0 })) },
+        { name: 'exited', color: '#64748b', values: agentRows.map((p) => ({ y: Number(p.exited) || 0 })) },
+      ];
+      drawLineChart('agentChart', agentSeries, 'agentLegend');
+
+      drawBarChart('throughputChart', metrics.throughput || [], 'throughputLegend');
+
+      const cycleRows = metrics.cycle_times || [];
+      const cycleSeries = [
+        { name: 'avg_minutes', color: '#0a7fa3', values: cycleRows.map((p) => ({ y: Number(p.avg_minutes) || 0 })) },
+        { name: 'p95_minutes', color: '#b42318', values: cycleRows.map((p) => ({ y: Number(p.p95_minutes) || 0 })) },
+      ];
+      drawLineChart('cycleChart', cycleSeries, 'cycleLegend');
+    }
+
+    function renderDag(snapshot, flow) {
+      const source = String(flow.source || '').trim();
+      const transitions = flow.transitions || {};
+      const events = Object.keys(transitions).sort();
+      if (!source || !events.length) {
+        document.getElementById('dagWrap').innerHTML = '<div class="empty">No flow metadata.</div>';
+        return;
+      }
+      const queues = snapshot.queues || {};
+      const targets = [...new Set(events.map((e) => String(transitions[e] || '').trim()).filter(Boolean))];
+      const width = Math.max(820, 330 + targets.length * 220);
+      const height = Math.max(280, 84 + targets.length * 74);
+      const nodeW = 188;
+      const nodeH = 54;
+      const srcX = 100;
+      const srcY = height / 2 - nodeH / 2;
+      const tgtX = width - 310;
+      const step = (height - 62) / Math.max(1, targets.length);
+      let nodes = `
+        <g class="dag-node source">
+          <rect x="${srcX}" y="${srcY}" width="${nodeW}" height="${nodeH}"></rect>
+          <text x="${srcX + 12}" y="${srcY + 22}">${esc(source)}</text>
+          <text class="count" x="${srcX + 12}" y="${srcY + 40}">total ${fmt((queues[source] || {}).total || 0)}</text>
+        </g>
+      `;
+      let edges = '';
+      const sx = srcX + nodeW;
+      const sy = srcY + nodeH / 2;
+      targets.forEach((label, i) => {
+        const y = 14 + i * step;
+        const cy = y + nodeH / 2;
+        const matched = events.filter((ev) => String(transitions[ev] || '') === label).join(', ');
+        edges += `<path class="dag-edge" d="M ${sx} ${sy} C ${sx + 120} ${sy}, ${tgtX - 90} ${cy}, ${tgtX} ${cy}"></path>`;
+        edges += `<text class="dag-label" x="${(sx + tgtX) / 2 - 26}" y="${(sy + cy) / 2 - 6}">${esc(matched)}</text>`;
+        nodes += `
+          <g class="dag-node">
+            <rect x="${tgtX}" y="${y}" width="${nodeW}" height="${nodeH}"></rect>
+            <text x="${tgtX + 12}" y="${y + 22}">${esc(label)}</text>
+            <text class="count" x="${tgtX + 12}" y="${y + 40}">total ${fmt((queues[label] || {}).total || 0)}</text>
+          </g>
+        `;
+      });
+      document.getElementById('dagWrap').innerHTML = `
+        <svg class="dag-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet">
+          <defs>
+            <marker id="arrowHead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+              <polygon points="0,0 10,4 0,8" fill="#5f88b0"></polygon>
+            </marker>
+          </defs>
+          ${edges}
+          ${nodes}
+        </svg>
+      `;
+    }
+
+    function renderAgents() {
+      const snap = appState.snapshot || {};
+      const beads = snap.beads || [];
+      const byBead = Object.fromEntries(beads.map((b) => [b.bead_id, b]));
+      let rows = (snap.agents || []).map((a) => {
+        const bead = byBead[a.bead_id] || {};
+        return {
+          ...a,
+          title: bead.title || '',
+          last_progress_ts: bead.last_progress_ts || '',
+          last_state_event: bead.last_state_event || '',
+        };
+      });
+      const needle = appState.agentSearch.trim().toLowerCase();
+      if (needle) {
+        rows = rows.filter((r) =>
+          [r.agent_name, r.bead_id, r.source_label, r.provider, r.title].some((v) => String(v || '').toLowerCase().includes(needle))
+        );
+      }
+      rows = sortRows(rows, appState.agentSort);
+
+      if (rows.length && !appState.selectedAgentBead) {
+        appState.selectedAgentBead = rows[0].bead_id;
+      }
+      if (appState.selectedAgentBead && !rows.some((r) => r.bead_id === appState.selectedAgentBead)) {
+        appState.selectedAgentBead = rows.length ? rows[0].bead_id : '';
+      }
+
+      if (!rows.length) {
+        document.getElementById('agentsTableWrap').innerHTML = '<div class="empty">No matching agents.</div>';
+      } else {
+        const rowsHTML = rows.map((r) => `
+          <tr class="clickable ${r.bead_id === appState.selectedAgentBead ? 'selected' : ''}" data-bead="${esc(r.bead_id)}">
+            <td>${esc(fmt(r.agent_name))}</td>
+            <td>${esc(fmt(r.bead_id))}</td>
+            <td>${badge(r.source_label || '-')}</td>
+            <td>${esc(fmt(r.provider))}</td>
+            <td>${badge(r.activity_state)}</td>
+            <td>${esc(fmt(r.pid))}</td>
+            <td class="mono">${esc(tsShort(r.last_progress_ts))}</td>
+          </tr>
+        `).join('');
+        document.getElementById('agentsTableWrap').innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th data-sort="agent_name">Agent ${sortMark(appState.agentSort, 'agent_name')}</th>
+                <th data-sort="bead_id">Bead ${sortMark(appState.agentSort, 'bead_id')}</th>
+                <th data-sort="source_label">Queue ${sortMark(appState.agentSort, 'source_label')}</th>
+                <th data-sort="provider">Provider ${sortMark(appState.agentSort, 'provider')}</th>
+                <th class="static">State</th>
+                <th data-sort="pid">PID ${sortMark(appState.agentSort, 'pid')}</th>
+                <th class="static">Progress</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHTML}</tbody>
+          </table>
+        `;
+        document.querySelectorAll('#agentsTableWrap th[data-sort]').forEach((el) => {
+          el.addEventListener('click', () => {
+            appState.agentSort = toggleSort(appState.agentSort, el.dataset.sort);
+            renderAgents();
+          });
+        });
+        document.querySelectorAll('#agentsTableWrap tr.clickable').forEach((row) => {
+          row.addEventListener('click', () => {
+            appState.selectedAgentBead = row.dataset.bead;
+            renderAgents();
+            loadAgentDetail();
+          });
+        });
+      }
+      renderAgentPanel();
+    }
+
+    function sortMark(sort, key) {
+      if (sort.key !== key) return '';
+      return sort.dir === 'asc' ? '^' : 'v';
+    }
+
+    async function loadAgentDetail() {
+      if (!appState.selectedAgentBead) {
+        appState.agentDetail = null;
+        appState.agentLogs = null;
+        renderAgentPanel();
+        return;
+      }
+      try {
+        appState.agentDetail = await fetchJSON(`/api/agent/${encodeURIComponent(appState.selectedAgentBead)}`);
+      } catch (err) {
+        appState.agentDetail = { error: err.message };
+      }
+      await loadAgentLogs();
+      renderAgentPanel();
+    }
+
+    async function loadAgentLogs() {
+      if (!appState.selectedAgentBead) {
+        appState.agentLogs = null;
+        return;
+      }
+      try {
+        appState.agentLogs = await fetchJSON(`/api/agent/${encodeURIComponent(appState.selectedAgentBead)}/logs?tail=260`);
+      } catch (err) {
+        appState.agentLogs = { error: err.message };
+      }
+    }
+
+    function renderAgentPanel() {
+      const host = document.getElementById('agentDetail');
+      const logsHost = document.getElementById('agentLogsTableWrap');
+      if (!appState.selectedAgentBead) {
+        host.innerHTML = '<div class="empty">Select an agent row.</div>';
+        logsHost.innerHTML = '<div class="empty">No logs.</div>';
+        return;
+      }
+      const data = appState.agentDetail || {};
+      if (data.error) {
+        host.innerHTML = `<div class="muted">Agent detail error: ${esc(data.error)}</div>`;
+      } else {
+        const rt = data.runtime || {};
+        const issue = data.issue || {};
+        host.innerHTML = `
+          <div class="detail-grid">
+            <div class="k">Agent</div><div>${esc(fmt(rt.agent_name))}</div>
+            <div class="k">Bead</div><div>${esc(fmt(rt.bead_id))}</div>
+            <div class="k">Issue</div><div>${esc(fmt(issue.title))}</div>
+            <div class="k">Queue</div><div>${badge(rt.source_label || '-')}</div>
+            <div class="k">Provider</div><div>${esc(fmt(rt.provider))}</div>
+            <div class="k">State</div><div>${badge(rt.activity_state)}</div>
+            <div class="k">PID</div><div class="mono">${esc(fmt(rt.pid))}</div>
+            <div class="k">Session Ref</div><div class="mono">${esc(fmt(rt.session_ref))}</div>
+            <div class="k">Started</div><div>${esc(fmt(rt.started_at))} <span class="muted">(${esc(ago(rt.started_at))})</span></div>
+            <div class="k">Last Progress</div><div>${esc(fmt(rt.last_progress_ts))} <span class="muted">(${esc(ago(rt.last_progress_ts))})</span></div>
+            <div class="k">Token</div><div class="mono">${esc(fmt(rt.assignment_token))}</div>
+            <div class="k">Resume</div>
+            <div>
+              <span class="mono">${esc(fmt(rt.resume_command))}</span>
+              ${rt.resume_command ? `<button class="btn" onclick="copyText(${JSON.stringify(String(rt.resume_command))})">Copy</button>` : ''}
+            </div>
+          </div>
+        `;
+      }
+
+      const logs = appState.agentLogs || {};
+      if (logs.error) {
+        logsHost.innerHTML = `<div class="muted">Log error: ${esc(logs.error)}</div>`;
+        return;
+      }
+      const events = logs.events || [];
+      if (!events.length) {
+        logsHost.innerHTML = '<div class="empty">No parsed log events yet.</div>';
+        return;
+      }
+      const rows = [...events].sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+      const body = rows.map((ev) => `
+        <tr>
+          <td class="mono">${esc(tsShort(ev.timestamp))}</td>
+          <td>${badge(ev.kind || 'other')}</td>
+          <td>${badge(ev.label || 'event')}</td>
+          <td>${esc(fmt(ev.summary))}</td>
+        </tr>
+      `).join('');
+      logsHost.innerHTML = `
+        <table>
+          <thead><tr><th class="static">Timestamp</th><th class="static">Kind</th><th class="static">Type</th><th class="static">Summary</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      `;
+    }
+
+    function beadMatchesFilter(bead) {
+      const filter = appState.beadStateFilter;
+      if (filter === 'all') return true;
+      const label = String(bead.label || '').toLowerCase();
+      const state = String(bead.activity_state || '').toLowerCase();
+      const event = String(bead.last_state_event || '').toLowerCase();
+      if (filter === 'done_like') {
+        return label.includes('done') || label.includes('review');
+      }
+      if (filter === 'failed') {
+        return event.endsWith(':failed') || event.endsWith(':error') || label.includes('error') || label.includes('failed');
+      }
+      return state === filter;
+    }
+
+    function renderBeads() {
+      const snap = appState.snapshot || {};
+      let rows = [...(snap.beads || [])];
+      const needle = appState.beadSearch.trim().toLowerCase();
+      if (needle) {
+        rows = rows.filter((r) => [r.bead_id, r.title, r.label, r.assignee].some((v) => String(v || '').toLowerCase().includes(needle)));
+      }
+      rows = rows.filter(beadMatchesFilter);
+      rows = sortRows(rows, appState.beadSort);
+
+      if (rows.length && !appState.selectedBead) {
+        appState.selectedBead = rows[0].bead_id;
+      }
+      if (appState.selectedBead && !rows.some((r) => r.bead_id === appState.selectedBead)) {
+        appState.selectedBead = rows.length ? rows[0].bead_id : '';
+      }
+
+      if (!rows.length) {
+        document.getElementById('beadsTableWrap').innerHTML = '<div class="empty">No matching beads.</div>';
+      } else {
+        const body = rows.map((r) => `
+          <tr class="clickable ${r.bead_id === appState.selectedBead ? 'selected' : ''}" data-bead="${esc(r.bead_id)}">
+            <td>${esc(fmt(r.bead_id))}</td>
+            <td>${esc(fmt(r.title || ''))}</td>
+            <td>${badge(r.label || '')}</td>
+            <td>${esc(fmt(r.assignee || 'unassigned'))}</td>
+            <td>${badge(r.activity_state || 'unknown')}</td>
+            <td>${esc(fmt(r.last_state_event || ''))}</td>
+            <td class="mono">${esc(tsShort(r.last_progress_ts || ''))}</td>
+          </tr>
+        `).join('');
+        document.getElementById('beadsTableWrap').innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th data-sort="bead_id">Bead ${sortMark(appState.beadSort, 'bead_id')}</th>
+                <th data-sort="title">Title ${sortMark(appState.beadSort, 'title')}</th>
+                <th data-sort="label">Label ${sortMark(appState.beadSort, 'label')}</th>
+                <th data-sort="assignee">Assignee ${sortMark(appState.beadSort, 'assignee')}</th>
+                <th data-sort="activity_state">State ${sortMark(appState.beadSort, 'activity_state')}</th>
+                <th class="static">Last Event</th>
+                <th data-sort="last_progress_ts">Progress ${sortMark(appState.beadSort, 'last_progress_ts')}</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+        `;
+        document.querySelectorAll('#beadsTableWrap th[data-sort]').forEach((el) => {
+          el.addEventListener('click', () => {
+            appState.beadSort = toggleSort(appState.beadSort, el.dataset.sort);
+            renderBeads();
+          });
+        });
+        document.querySelectorAll('#beadsTableWrap tr.clickable').forEach((row) => {
+          row.addEventListener('click', () => {
+            appState.selectedBead = row.dataset.bead;
+            renderBeads();
+            loadBeadDetail();
+          });
+        });
+      }
+
+      renderBeadPanel();
+      renderKanban(snap);
+    }
+
+    async function loadBeadDetail() {
+      if (!appState.selectedBead) {
+        appState.beadDetail = null;
+        appState.beadLogs = null;
+        renderBeadPanel();
+        return;
+      }
+      try {
+        appState.beadDetail = await fetchJSON(`/api/bead/${encodeURIComponent(appState.selectedBead)}`);
+      } catch (err) {
+        appState.beadDetail = { error: err.message };
+      }
+      await loadBeadLogs();
+      renderBeadPanel();
+    }
+
+    async function loadBeadLogs() {
+      if (!appState.selectedBead) {
+        appState.beadLogs = null;
+        return;
+      }
+      try {
+        appState.beadLogs = await fetchJSON(`/api/agent/${encodeURIComponent(appState.selectedBead)}/logs?tail=260`);
+      } catch {
+        appState.beadLogs = null;
+      }
+    }
+
+    function renderBeadPanel() {
+      const detailHost = document.getElementById('beadSubview-details');
+      const historyHost = document.getElementById('beadSubview-history');
+      const logsHost = document.getElementById('beadSubview-logs');
+      if (!appState.selectedBead) {
+        detailHost.innerHTML = '<div class="empty">Select a bead row.</div>';
+        historyHost.innerHTML = '<div class="empty">No history.</div>';
+        logsHost.innerHTML = '<div class="empty">No logs.</div>';
+        return;
+      }
+      const data = appState.beadDetail || {};
+      if (data.error) {
+        detailHost.innerHTML = `<div class="muted">Bead detail error: ${esc(data.error)}</div>`;
+        historyHost.innerHTML = '<div class="empty">No history.</div>';
+        logsHost.innerHTML = '<div class="empty">No logs.</div>';
+        return;
+      }
+
+      const issue = data.issue || {};
+      const runtime = data.runtime || {};
+      const comments = data.comments || [];
+      const input = data.input || {};
+      const output = data.output || {};
+      const history = data.history || {};
+      const segments = history.segments || [];
+      const events = history.events || [];
+
+      detailHost.innerHTML = `
+        <div class="detail-panel">
+          <div class="panel" style="box-shadow:none;">
+            <h2 style="margin-top:0;">Issue</h2>
+            <div class="detail-grid">
+              <div class="k">ID</div><div>${esc(fmt(issue.id))}</div>
+              <div class="k">Title</div><div>${esc(fmt(issue.title))}</div>
+              <div class="k">Status</div><div>${esc(fmt(issue.status))}</div>
+              <div class="k">Labels</div><div>${(issue.labels || []).map((l) => badge(l)).join(' ') || '-'}</div>
+              <div class="k">Assignee</div><div>${esc(fmt(issue.assignee || 'unassigned'))}</div>
+              <div class="k">Updated</div><div>${esc(fmt(issue.updated_at))} <span class="muted">(${esc(ago(issue.updated_at))})</span></div>
+            </div>
+            <div class="code" style="margin-top:10px;">${esc(fmt(issue.description || ''))}</div>
+          </div>
+
+          <div class="panel" style="box-shadow:none;">
+            <h2 style="margin-top:0;">Input / Output</h2>
+            <div class="detail-grid">
+              <div class="k">Input Summary</div><div>${esc(fmt(input.description || issue.description || '-'))}</div>
+              <div class="k">Output State</div><div>${esc(fmt(output.state_event || '-'))}</div>
+              <div class="k">Latest Comment</div><div>${esc(fmt(output.latest_comment || '-'))}</div>
+              <div class="k">Agent Summary</div><div>${esc(fmt(output.agent_summary || '-'))}</div>
+            </div>
+            ${input.runtime_payload ? `<div class="code" style="margin-top:10px;">${esc(JSON.stringify(input.runtime_payload, null, 2))}</div>` : ''}
+          </div>
+
+          <div class="panel" style="box-shadow:none;">
+            <h2 style="margin-top:0;">Current Assignment</h2>
+            <div class="detail-grid">
+              <div class="k">Agent</div><div>${esc(fmt(runtime.agent_name || '-'))}</div>
+              <div class="k">Provider</div><div>${esc(fmt(runtime.provider || '-'))}</div>
+              <div class="k">State</div><div>${badge(runtime.activity_state || 'unknown')}</div>
+              <div class="k">PID</div><div class="mono">${esc(fmt(runtime.pid || '-'))}</div>
+              <div class="k">Started</div><div>${esc(fmt(runtime.started_at || '-'))} <span class="muted">(${esc(ago(runtime.started_at))})</span></div>
+              <div class="k">Last Progress</div><div>${esc(fmt(runtime.last_progress_ts || '-'))} <span class="muted">(${esc(ago(runtime.last_progress_ts))})</span></div>
+              <div class="k">Resume</div><div>${runtime.resume_command ? `<span class="mono">${esc(runtime.resume_command)}</span> <button class="btn" onclick="copyText(${JSON.stringify(String(runtime.resume_command))})">Copy</button>` : '-'}</div>
+            </div>
+          </div>
+
+          <div class="panel" style="box-shadow:none;">
+            <h2 style="margin-top:0;">Comments</h2>
+            <div class="event-feed">
+              ${(comments || []).slice().reverse().slice(0, 18).map((c) => `
+                <div class="event-item">
+                  <div class="event-ts mono">${esc(tsShort(c.created_at))}</div>
+                  <div class="event-kind">${esc(fmt(c.author))}</div>
+                  <div class="event-detail">${esc(fmt(c.text || ''))}</div>
+                </div>
+              `).join('') || '<div class="empty">No comments.</div>'}
+            </div>
+          </div>
+        </div>
+      `;
+
+      const total = Math.max(1, ...segments.map((s) => Number(s.duration_seconds) || 0));
+      historyHost.innerHTML = `
+        <div class="detail-panel">
+          <div class="panel" style="box-shadow:none;">
+            <h2 style="margin-top:0;">Gantt Timeline</h2>
+            <div class="timeline">
+              ${segments.map((s, i) => {
+                const dur = Number(s.duration_seconds) || 0;
+                const width = Math.max(4, Math.round((dur / total) * 100));
+                return `
+                  <div class="gantt-row">
+                    <div class="gantt-label">${esc(fmt(s.label))}</div>
+                    <div class="gantt-track">
+                      <div class="gantt-bar" style="width:${width}%; background:${i % 2 ? '#1d4ed8' : '#0ea5b7'}"></div>
+                    </div>
+                    <div class="gantt-meta">${esc(fmtDurationSeconds(dur))}</div>
+                  </div>
+                `;
+              }).join('') || '<div class="empty">No timeline segments.</div>'}
+            </div>
+          </div>
+          <div class="panel" style="box-shadow:none;">
+            <h2 style="margin-top:0;">Event Stream</h2>
+            <div class="event-feed">
+              ${events.slice().reverse().map((e) => `
+                <div class="event-item">
+                  <div class="event-ts mono">${esc(tsShort(e.ts))}</div>
+                  <div class="event-kind">${esc(fmt(e.kind))}</div>
+                  <div class="event-detail">${esc(fmt(e.detail || e.state_event || `${e.from || ''} -> ${e.to || ''}`))}</div>
+                </div>
+              `).join('') || '<div class="empty">No events.</div>'}
+            </div>
+          </div>
+        </div>
+      `;
+
+      const logs = appState.beadLogs || {};
+      const rows = (logs.events || []).slice().sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+      logsHost.innerHTML = rows.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th class="static">Timestamp</th><th class="static">Kind</th><th class="static">Type</th><th class="static">Summary</th></tr></thead>
+            <tbody>
+              ${rows.map((ev) => `
+                <tr>
+                  <td class="mono">${esc(tsShort(ev.timestamp))}</td>
+                  <td>${badge(ev.kind || 'other')}</td>
+                  <td>${badge(ev.label || 'event')}</td>
+                  <td>${esc(fmt(ev.summary || ''))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : '<div class="empty">No logs available for this bead.</div>';
+    }
+
+    function renderKanban(snapshot) {
+      const wrap = document.getElementById('kanbanWrap');
+      const queues = snapshot.queues || {};
+      const beads = snapshot.beads || [];
+      const labels = Object.keys(queues).sort();
+      if (!labels.length) {
+        wrap.innerHTML = '<div class="empty">No queues.</div>';
+        return;
+      }
+      wrap.innerHTML = labels.map((label) => {
+        const items = beads.filter((b) => String(b.label) === label);
+        return `
+          <div class="kan-col">
+            <div class="kan-head">
+              <span>${esc(label)}</span>
+              <span>${esc(items.length)}</span>
+            </div>
+            ${items.map((b) => `
+              <div class="kan-card" data-bead="${esc(b.bead_id)}">
+                <div class="kan-title">${esc(fmt(b.bead_id))} - ${esc(fmt(b.title || ''))}</div>
+                <div class="kan-meta">
+                  <span>${esc(fmt(b.assignee || 'unassigned'))}</span>
+                  <span>${esc(ago(b.last_progress_ts || ''))}</span>
+                </div>
+                <div>${badge(b.activity_state || 'unknown')}</div>
+              </div>
+            `).join('') || '<div class="empty">No beads.</div>'}
+          </div>
+        `;
+      }).join('');
+      document.querySelectorAll('.kan-card').forEach((el) => {
+        el.addEventListener('click', () => {
+          appState.selectedBead = el.dataset.bead;
+          setTab('beads');
+          renderBeads();
+          loadBeadDetail();
+        });
+      });
+    }
+
+    async function refreshMetrics() {
+      try {
+        appState.metrics = await fetchJSON(`/api/metrics?range=${encodeURIComponent(appState.range)}&resolution=${encodeURIComponent(appState.resolution)}`);
+      } catch (err) {
+        appState.metrics = { error: err.message, queues: {}, agents: [], throughput: [], cycle_times: [] };
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const payload = await fetchJSON('/api/status');
+        appState.payload = payload;
+        appState.snapshot = payload.snapshot || {};
+        appState.flowSummary = payload.flow_summary || {};
+        renderHeader(payload);
+        renderOverview();
+        renderAgents();
+        renderBeads();
+      } catch (err) {
+        document.getElementById('subtitle').textContent = `status fetch failed: ${err.message}`;
+      }
+    }
+
+    async function refreshAll() {
+      await Promise.all([refreshMetrics(), refreshStatus()]);
+      if (appState.selectedAgentBead) {
+        await Promise.all([loadAgentDetail()]);
+      }
+      if (appState.selectedBead) {
+        await Promise.all([loadBeadDetail()]);
+      }
+    }
+
+    function setupTimers() {
+      if (appState.timers.status) clearInterval(appState.timers.status);
+      if (appState.timers.logs) clearInterval(appState.timers.logs);
+      if (!appState.autoRefresh) return;
+      appState.timers.status = setInterval(() => {
+        refreshMetrics();
+        refreshStatus();
+      }, appState.refreshMs);
+      appState.timers.logs = setInterval(() => {
+        if (appState.selectedAgentBead && appState.selectedTab === 'agents') {
+          loadAgentLogs().then(renderAgentPanel);
+        }
+        if (appState.selectedBead && appState.selectedTab === 'beads' && appState.beadSubtab === 'logs') {
+          loadBeadLogs().then(renderBeadPanel);
+        }
+      }, 1800);
+    }
+
+    document.querySelectorAll('.tab-btn').forEach((el) => {
+      el.addEventListener('click', () => setTab(el.dataset.tab));
+    });
+    document.querySelectorAll('.subtab').forEach((el) => {
+      el.addEventListener('click', () => setBeadSubtab(el.dataset.subtab));
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      refreshAll();
+    });
+
+    document.getElementById('autoRefreshBtn').addEventListener('click', () => {
+      appState.autoRefresh = !appState.autoRefresh;
+      document.getElementById('autoRefreshBtn').textContent = `Auto Refresh: ${appState.autoRefresh ? 'ON' : 'OFF'}`;
+      setupTimers();
+    });
+
+    document.getElementById('rangeSelect').addEventListener('change', (e) => {
+      appState.range = e.target.value;
+      refreshMetrics().then(renderOverview);
+    });
+    document.getElementById('resolutionSelect').addEventListener('change', (e) => {
+      appState.resolution = e.target.value;
+      refreshMetrics().then(renderOverview);
+    });
+
+    document.getElementById('agentSearch').addEventListener('input', (e) => {
+      appState.agentSearch = e.target.value;
+      renderAgents();
+    });
+    document.getElementById('beadSearch').addEventListener('input', (e) => {
+      appState.beadSearch = e.target.value;
+      renderBeads();
+    });
+    document.getElementById('beadStateFilter').addEventListener('change', (e) => {
+      appState.beadStateFilter = e.target.value;
+      renderBeads();
+    });
+
+    refreshAll();
+    setupTimers();
+  </script>
+</body>
+</html>

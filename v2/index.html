@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>bsw v2 - Complete Specification</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-1: #f4f8fb;
+            --bg-2: #dde9f3;
+            --surface: #ffffff;
+            --ink: #0f2438;
+            --muted: #4e6478;
+            --line: #c7d7e5;
+            --accent: #0a7b83;
+            --accent-2: #2563eb;
+            --good: #198754;
+            --warn: #b07600;
+            --bad: #b42318;
+            --shadow: 0 8px 24px rgba(15, 36, 56, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+            background: linear-gradient(140deg, var(--bg-1), var(--bg-2));
+            color: var(--ink);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 28px 18px 56px;
+        }
+
+        header {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            padding: 28px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            letter-spacing: -0.02em;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            margin-bottom: 16px;
+            font-size: 1.05rem;
+        }
+
+        .pill-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 6px 14px;
+            font-size: 0.82rem;
+            font-weight: 600;
+        }
+
+        .pill.ok {
+            background: #e7f8ef;
+            color: var(--good);
+            border: 1px solid #b8e6cc;
+        }
+
+        .pill.info {
+            background: #eaf2ff;
+            color: #1d4ed8;
+            border: 1px solid #c8dcff;
+        }
+
+        section {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            padding: 26px;
+            margin-bottom: 18px;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            margin-bottom: 14px;
+            letter-spacing: -0.01em;
+            border-bottom: 2px solid var(--accent-2);
+            padding-bottom: 8px;
+        }
+
+        h3 {
+            font-size: 1.1rem;
+            margin: 16px 0 10px;
+            color: var(--ink);
+            font-weight: 700;
+        }
+
+        p {
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+
+        code {
+            background: #f0f4f8;
+            color: var(--accent);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.9em;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+            margin-top: 14px;
+        }
+
+        .summary-card {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 16px;
+            background: #fbfdff;
+        }
+
+        .summary-card h4 {
+            font-size: 0.97rem;
+            margin-bottom: 8px;
+            color: var(--ink);
+            font-weight: 700;
+        }
+
+        .summary-card p {
+            font-size: 0.9rem;
+            margin: 0;
+        }
+
+        .flow-track {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .flow-step {
+            border: 1px solid #b8cde0;
+            border-radius: 10px;
+            background: #ffffff;
+            padding: 12px;
+            min-height: 120px;
+        }
+
+        .flow-step .num {
+            font-family: "IBM Plex Mono", monospace;
+            color: var(--accent-2);
+            font-size: 0.75rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .flow-step strong {
+            display: block;
+            font-size: 0.92rem;
+            margin-bottom: 5px;
+            color: var(--ink);
+        }
+
+        .flow-step p {
+            font-size: 0.84rem;
+            margin: 0;
+        }
+
+        .note {
+            margin-top: 14px;
+            border-left: 4px solid var(--accent);
+            background: #e8f7f8;
+            padding: 12px 14px;
+            border-radius: 8px;
+            color: #124e52;
+            font-size: 0.93rem;
+        }
+
+        .code {
+            margin-top: 12px;
+            background: #112033;
+            color: #e9f3ff;
+            border-radius: 12px;
+            padding: 14px;
+            overflow-x: auto;
+            font-family: "IBM Plex Mono", "Fira Code", monospace;
+            font-size: 0.82rem;
+            line-height: 1.6;
+            border: 1px solid #1a3a5a;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+            font-size: 0.92rem;
+        }
+
+        th, td {
+            border-bottom: 1px solid var(--line);
+            text-align: left;
+            padding: 11px 10px;
+            vertical-align: top;
+        }
+
+        th {
+            color: var(--ink);
+            background: #f4f9ff;
+            font-weight: 700;
+        }
+
+        tr:hover {
+            background: #f9fbff;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            border-bottom: 2px solid var(--line);
+            margin-top: 12px;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            color: var(--muted);
+            font-weight: 600;
+            padding: 10px 12px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: color 0.2s;
+        }
+
+        .tab-btn:hover {
+            color: var(--ink);
+        }
+
+        .tab-btn.active {
+            color: var(--accent-2);
+            border-bottom-color: var(--accent-2);
+        }
+
+        .tab-content {
+            display: none;
+            padding-top: 14px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        ul, ol {
+            margin-top: 10px;
+            padding-left: 24px;
+        }
+
+        li {
+            margin: 8px 0;
+            color: var(--muted);
+        }
+
+        .diagram {
+            margin-top: 14px;
+            border: 1px dashed #9bb5cd;
+            border-radius: 12px;
+            background: #f8fbfe;
+            padding: 16px;
+        }
+
+        .lane-title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #35516a;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .arch-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .arch-box {
+            background: #ffffff;
+            border: 1px solid #b8cde0;
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .arch-box strong {
+            display: block;
+            font-size: 0.95rem;
+            margin-bottom: 4px;
+            color: var(--ink);
+        }
+
+        .arch-box span {
+            font-size: 0.87rem;
+            color: var(--muted);
+        }
+
+        .arrow {
+            text-align: center;
+            color: #5f7f9b;
+            font-size: 0.95rem;
+            margin: 4px 0;
+        }
+
+        .section-intro {
+            background: #e8f4ff;
+            border-left: 4px solid var(--accent-2);
+            padding: 12px 14px;
+            border-radius: 6px;
+            margin-bottom: 14px;
+            font-size: 0.95rem;
+        }
+
+        footer {
+            margin-top: 16px;
+            text-align: center;
+            font-size: 0.85rem;
+            color: #58708a;
+        }
+
+        .toc {
+            background: #f9fbff;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 14px;
+        }
+
+        .toc a {
+            color: var(--accent-2);
+            text-decoration: none;
+            display: block;
+            padding: 4px 0;
+            font-size: 0.93rem;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 700px) {
+            h1 {
+                font-size: 1.8rem;
+            }
+            h2 {
+                font-size: 1.2rem;
+            }
+            section, header {
+                padding: 18px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>bsw v2 — Complete Specification</h1>
+            <p class="subtitle">Queue orchestration system for AI agent fleet management. Durable state, atomic operations, operator-first visibility.</p>
+            <div class="pill-row">
+                <span class="pill ok">Pull-Based Queues</span>
+                <span class="pill ok">Durable State</span>
+                <span class="pill info">SQLite Backend</span>
+                <span class="pill info">YAML DSL</span>
+            </div>
+        </header>
+
+        <!-- CORE CONCEPTS SECTION -->
+        <section>
+            <h2>Core Concepts</h2>
+            <div class="summary-grid">
+                <div class="summary-card">
+                    <h4>Beads</h4>
+                    <p>Work items with labels, comments, assignee. Source of workflow truth stored in SQLite.</p>
+                </div>
+                <div class="summary-card">
+                    <h4>Queues</h4>
+                    <p>Defined by source label (e.g., needs-impl). Workers autonomously pull unassigned beads.</p>
+                </div>
+                <div class="summary-card">
+                    <h4>Workers</h4>
+                    <p>Processes that: claim → work → emit STATE → release. Workers are ephemeral.</p>
+                </div>
+                <div class="summary-card">
+                    <h4>bsw</h4>
+                    <p>Dumb executor: parse DSL, claim beads atomically, validate STATE events, transition labels.</p>
+                </div>
+                <div class="summary-card">
+                    <h4>Orchestrator</h4>
+                    <p>Smart controller (user-built): runs queues, reads status/logs, sends mail, decides retries.</p>
+                </div>
+                <div class="summary-card">
+                    <h4>State</h4>
+                    <p>Determined by bead labels only. No hidden state. Restart-safe by design.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- HOW CODE IS RUN SECTION -->
+        <section>
+            <h2>How Code Is Run (Execution Flow)</h2>
+            <div class="section-intro">
+                When orchestrator calls <code>bsw run flows/queue.yaml</code>, here's what happens step-by-step.
+            </div>
+
+            <h3>Command Line</h3>
+            <div class="code">bsw run flows/implement_queue.yaml --mode oneshot
+# Blocks until queue is empty, then exits with status</div>
+
+            <h3>Internal Execution (6 Steps)</h3>
+            <div class="flow-track">
+                <div class="flow-step">
+                    <div class="num">STEP 1</div>
+                    <strong>Parse & Validate</strong>
+                    <p>Load YAML. Validate schema. Extract source label, worker count, transitions.</p>
+                </div>
+                <div class="flow-step">
+                    <div class="num">STEP 2</div>
+                    <strong>Claim Bead</strong>
+                    <p>Query beads in source label. Find unassigned. Atomically set assignee + token via SQLite CAS. Emit spawn event.</p>
+                </div>
+                <div class="flow-step">
+                    <div class="num">STEP 3</div>
+                    <strong>Spawn Worker</strong>
+                    <p>Fork process with bead context. Pass assignment_token. Start state detectors (JSONL watcher, process monitor, stuck timer).</p>
+                </div>
+                <div class="flow-step">
+                    <div class="num">STEP 4</div>
+                    <strong>Worker Works</strong>
+                    <p>Worker: get bead → run prompt → emit STATE event with token. bsw watches for comments.</p>
+                </div>
+                <div class="flow-step">
+                    <div class="num">STEP 5</div>
+                    <strong>Detect State</strong>
+                    <p>3-layer: JSONL events, process exit, stuck timer. Validate STATE against transitions. Emit state event.</p>
+                </div>
+                <div class="flow-step">
+                    <div class="num">STEP 6</div>
+                    <strong>Atomic Transition</strong>
+                    <p>Remove source label, add target, clear assignee. Emit transition event. Release worker.</p>
+                </div>
+            </div>
+
+            <div class="note">
+                <strong>Loop:</strong> Repeat steps 2-6 until source label is empty AND all workers are idle.<br/>
+                <strong>Exit:</strong> oneshot mode: SIGTERM all workers. service mode: keep running for new beads.
+            </div>
+
+            <h3>State Transitions</h3>
+            <p>Defined in DSL. Example:</p>
+            <div class="code">transitions:
+  "impl:done": "needs-proof"       # Done implementing → move to proof queue
+  "impl:blocked": "needs-help"     # Blocked → escalate to help queue</div>
+        </section>
+
+        <!-- HOW STATUS IS EXTRACTED SECTION -->
+        <section>
+            <h2>How Status Is Extracted (3 Mechanisms)</h2>
+            <div class="section-intro">
+                Orchestrator never asks bsw "what's the state?" Instead, it observes via three independent channels.
+            </div>
+
+            <h3>Mechanism 1: JSONL Event Stream (Real-Time Log)</h3>
+            <p><strong>File:</strong> <code>.bsw/logs/queue-&lt;run-id&gt;.jsonl</code></p>
+            <p>Ordered sequence of events. Orchestrator tails this file asynchronously (no blocking).</p>
+            <div class="code">{"event":"spawn","bead_id":"bd-123","token":"run:bd-123:1","pid":4521,"ts":"2026-02-27T10:00:00Z"}
+{"event":"state","bead_id":"bd-123","value":"impl:done","token":"run:bd-123:1","ts":"2026-02-27T10:05:00Z"}
+{"event":"transition","bead_id":"bd-123","from":"needs-impl","to":"needs-proof","ts":"2026-02-27T10:05:01Z"}
+{"event":"done","bead_id":"bd-123","ts":"2026-02-27T10:05:01Z"}</div>
+
+            <h3>Mechanism 2: Status Snapshot (One-Call Query)</h3>
+            <p><strong>Command:</strong> <code>bsw status --json</code></p>
+            <p>Point-in-time snapshot of all queue state, bead ownership, and attention items.</p>
+            <div class="code">{
+  "queues": {
+    "needs-impl": {"total": 7, "unassigned": 3, "assigned": 4}
+  },
+  "beads": [
+    {
+      "bead_id": "bd-123",
+      "label": "needs-impl",
+      "assignee": "GreenLake",
+      "activity_state": "active",
+      "last_progress": "2026-02-27T10:12:03Z"
+    }
+  ],
+  "agents": [
+    {
+      "agent_name": "GreenLake",
+      "provider": "codex",
+      "session_ref": "thread_abc123",
+      "resume_command": "codex app-server --thread thread_abc123"
+    }
+  ],
+  "attention": [
+    {
+      "bead_id": "bd-123",
+      "reason": "waiting_input",
+      "suggested_action": "send_mail_then_ping"
+    }
+  ]
+}</div>
+
+            <h3>Mechanism 3: Provider State Detection (Auto-Detect)</h3>
+            <p>bsw automatically detects worker state from three independent signals:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Signal</th>
+                        <th>Source</th>
+                        <th>Detects</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>Provider Events</code></td>
+                        <td>Claude/Codex JSON output in comments</td>
+                        <td>Explicit STATE events with assignment token</td>
+                    </tr>
+                    <tr>
+                        <td><code>Process Exit</code></td>
+                        <td>OS process table monitoring</td>
+                        <td>Worker crash (SIGKILL, OOM, panic, non-zero exit)</td>
+                    </tr>
+                    <tr>
+                        <td><code>Stuck Timer</code></td>
+                        <td>Elapsed time since last progress</td>
+                        <td>Hung worker (paused if state=waiting_input)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Orchestrator Usage Pattern</h3>
+            <ol>
+                <li><strong>Start:</strong> <code>bsw run flows/queue.yaml --mode oneshot</code> (blocking call)</li>
+                <li><strong>Monitor:</strong> Tail <code>.bsw/logs/queue-*.jsonl</code> asynchronously in real-time</li>
+                <li><strong>Check:</strong> <code>bsw status --json</code> whenever you need a full snapshot</li>
+                <li><strong>Act:</strong> Use <code>attention</code> list to know what needs intervention</li>
+            </ol>
+        </section>
+
+        <!-- YAML DSL SECTION -->
+        <section>
+            <h2>Queue DSL (YAML Specification)</h2>
+            <div class="section-intro">
+                Define queues in YAML. Queue = source label + worker count + state transitions.
+            </div>
+
+            <h3>Complete Example</h3>
+            <div class="code">version: "1"
+name: "implement_queue"
+source:
+  label: "needs-impl"
+workers:
+  count: 3
+  timeout: 3600
+transitions:
+  "impl:done": "needs-proof"
+  "impl:blocked": "needs-help"
+  "impl:invalid": "error"</div>
+
+            <h3>Field Reference</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>version</code></td>
+                        <td>string</td>
+                        <td>DSL version (currently "1")</td>
+                    </tr>
+                    <tr>
+                        <td><code>name</code></td>
+                        <td>string</td>
+                        <td>Queue identifier (used in logs)</td>
+                    </tr>
+                    <tr>
+                        <td><code>source.label</code></td>
+                        <td>string</td>
+                        <td>Label defining queue (beads with this label are work items)</td>
+                    </tr>
+                    <tr>
+                        <td><code>workers.count</code></td>
+                        <td>int</td>
+                        <td>Max concurrent workers (backpressure valve)</td>
+                    </tr>
+                    <tr>
+                        <td><code>workers.timeout</code></td>
+                        <td>int (seconds)</td>
+                        <td>How long before worker considered stuck (paused if waiting_input)</td>
+                    </tr>
+                    <tr>
+                        <td><code>transitions</code></td>
+                        <td>map</td>
+                        <td>STATE event → target label. Keys are event names, values are destination labels</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Execution Models</h3>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab(event, 'model-seq')">Sequential</button>
+                <button class="tab-btn" onclick="switchTab(event, 'model-par')">Parallel</button>
+                <button class="tab-btn" onclick="switchTab(event, 'model-svc')">Service</button>
+            </div>
+
+            <div id="model-seq" class="tab-content active">
+                <p><strong>Best for:</strong> Strict ordering. Queue 1 completes before Queue 2 starts.</p>
+                <div class="code">bsw run flows/implement.yaml      # Blocks until done
+bsw run flows/proof.yaml          # Blocks until done
+bsw run flows/review.yaml         # Blocks until done</div>
+                <p style="margin-top: 10px;">Clear exit codes and process semantics. Orchestrator can check each return code.</p>
+            </div>
+
+            <div id="model-par" class="tab-content">
+                <p><strong>Best for:</strong> Multiple independent queues run in parallel with wait.</p>
+                <div class="code">bsw run flows/impl.yaml --mode service &
+bsw run flows/proof.yaml --mode service &
+bsw run flows/review.yaml --mode service &
+wait</div>
+                <p style="margin-top: 10px;">Each queue refills as upstream produces work. Orchestrator waits for all to complete.</p>
+            </div>
+
+            <div id="model-svc" class="tab-content">
+                <p><strong>Best for:</strong> Long-running queue that continuously drains refilled work.</p>
+                <div class="code">bsw run flows/review.yaml --mode service</div>
+                <p style="margin-top: 10px;">Stays active until orchestrator calls <code>bsw stop</code> or process killed.</p>
+            </div>
+        </section>
+
+        <!-- CLI COMMANDS SECTION -->
+        <section>
+            <h2>CLI Commands Reference</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Command</th>
+                        <th>Purpose</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>bsw init</code></td>
+                        <td>Initialize .bsw directory structure</td>
+                        <td><code>bsw init</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>bsw doctor</code></td>
+                        <td>Check health: beads store, config, syntax</td>
+                        <td><code>bsw doctor flows/queue.yaml</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>bsw run</code></td>
+                        <td>Execute queue (oneshot or service mode)</td>
+                        <td><code>bsw run flows/queue.yaml --mode oneshot</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>bsw status</code></td>
+                        <td>Query current queue state snapshot</td>
+                        <td><code>bsw status --json</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>bsw ping</code></td>
+                        <td>Nudge agent to check agent-mail for response</td>
+                        <td><code>bsw ping bd-123</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>bsw kill</code></td>
+                        <td>Force-terminate a worker and release bead</td>
+                        <td><code>bsw kill bd-123</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>bsw stop</code></td>
+                        <td>Gracefully stop all queues and SIGTERM workers</td>
+                        <td><code>bsw stop</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- CONTRACTS SECTION -->
+        <section>
+            <h2>Key Contracts</h2>
+
+            <h3>Worker STATE Contract</h3>
+            <p>Worker emits one terminal STATE comment with assignment token:</p>
+            <div class="code">STATE impl:done assignment=run:bd-123:1</div>
+            <p>bsw validates: (1) event exists in transitions, (2) token matches active claim, (3) comment id newer than cursor.</p>
+
+            <h3>Claim Contract (Atomic)</h3>
+            <ul>
+                <li>bsw claims via CAS: only succeeds if bead currently unassigned</li>
+                <li>If claim fails, emit claim_conflict and try next candidate</li>
+                <li>Worker must never start without successful claim</li>
+                <li>Release on timeout/crash must be guarded: clear assignee only if it matches active worker</li>
+            </ul>
+
+            <h3>Transition Contract (Atomic)</h3>
+            <ul>
+                <li>Remove source label</li>
+                <li>Add target label from transitions[event]</li>
+                <li>Clear assignee</li>
+                <li>If precondition fails (stale STATE, wrong token, missing target label): emit transition_conflict</li>
+            </ul>
+
+            <h3>Stuck Contract</h3>
+            <ul>
+                <li>If no progress past timeout AND state ≠ waiting_input: emit stuck_no_progress</li>
+                <li>If state = waiting_input: pause stuck escalation timer</li>
+                <li>No automatic retry/escalation inside bsw</li>
+            </ul>
+
+            <h3>Idempotency Contract</h3>
+            <ul>
+                <li>Persist last_processed_comment_id per bead</li>
+                <li>Only process comments with id > cursor</li>
+                <li>Ignore stale/duplicate STATE comments</li>
+            </ul>
+        </section>
+
+        <!-- ATTENTION MAPPING SECTION -->
+        <section>
+            <h2>Attention to Action Mapping</h2>
+            <p>When <code>bsw status --json</code> returns attention items, orchestrator uses this table to know what to do:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Attention Reason</th>
+                        <th>Meaning</th>
+                        <th>Operator Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>waiting_input</code></td>
+                        <td>Agent requires approval/feedback</td>
+                        <td>Send mail response, then <code>bsw ping &lt;bead-id&gt;</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>stuck_no_progress</code></td>
+                        <td>No progress and not waiting_input</td>
+                        <td>Inspect resume_command; optionally <code>bsw kill &lt;bead-id&gt;</code> and rerun</td>
+                    </tr>
+                    <tr>
+                        <td><code>orphaned_assignment</code></td>
+                        <td>Registry/process/assignee mismatch</td>
+                        <td>Reconcile and clear stale claim, then requeue</td>
+                    </tr>
+                    <tr>
+                        <td><code>transition_conflict</code></td>
+                        <td>Preconditions failed during transition</td>
+                        <td>Refresh bead state, apply manual repair if needed</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- DESIGN PRINCIPLES SECTION -->
+        <section>
+            <h2>Design Principles</h2>
+            <ol>
+                <li><strong>Beads are workflow truth:</strong> Labels, comments, assignee define durable state (not internal bsw state)</li>
+                <li><strong>Single owner for mutations:</strong> Only bsw can assign or move labels. Workers emit STATE, nothing else.</li>
+                <li><strong>Pull-based queue:</strong> Workers pull when ready. No push complexity. Natural backpressure.</li>
+                <li><strong>bsw is dumb:</strong> Queue executor only. Orchestrator owns policy (retry, escalation, approval).</li>
+                <li><strong>Structured IO only:</strong> JSONL events, JSON status. No regex parsing of text.</li>
+                <li><strong>Operator-first visibility:</strong> One <code>status</code> call exposes everything: queue state, ownership, attention.</li>
+                <li><strong>Restart-safe by design:</strong> Session UUIDs, idempotent STATE handling. Crash → rerun queue safely.</li>
+            </ol>
+        </section>
+
+        <!-- PRODUCTION READINESS SECTION -->
+        <section>
+            <h2>Production Readiness</h2>
+            <div class="summary-grid">
+                <div class="summary-card">
+                    <h4>✅ Ready</h4>
+                    <ul style="margin-top: 8px; padding-left: 18px;">
+                        <li>Core architecture is sound</li>
+                        <li>SQLite WAL backend handles concurrency</li>
+                        <li>Failure modes well-understood</li>
+                    </ul>
+                </div>
+                <div class="summary-card">
+                    <h4>⚠️ Phase 1</h4>
+                    <ul style="margin-top: 8px; padding-left: 18px;">
+                        <li>Single-node batch processing</li>
+                        <li>Up to 100 workers on local SQLite</li>
+                        <li>Beads stored locally</li>
+                    </ul>
+                </div>
+                <div class="summary-card">
+                    <h4>🟡 Phase 2</h4>
+                    <ul style="margin-top: 8px; padding-left: 18px;">
+                        <li>Distributed beads (PostgreSQL)</li>
+                        <li>Cross-machine orchestration</li>
+                        <li>Metrics/observability tooling</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            bsw v2 · Queue orchestration for AI agent fleets · <span style="color: var(--good);">✓ Ready for Phase 1</span>
+        </footer>
+    </div>
+
+    <script>
+        function switchTab(event, tabName) {
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach((content) => content.classList.remove('active'));
+
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach((btn) => btn.classList.remove('active'));
+
+            const element = document.getElementById(tabName);
+            if (element) {
+                element.classList.add('active');
+            }
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>
