@@ -19,4 +19,4 @@ Execution pattern:
 4. If validation fails due infra-only issues (port conflict, transient startup errors, bad grep selector), fix invocation and retry once.
 5. Post terminal STATE comment:
    - success path: `br comments add <bead_id> "STATE impl:done assignment=<token>"`
-   - failure path: `br comments add <bead_id> "STATE impl:error assignment=<token>"`
+   - failure path: `br comments add <bead_id> "STATE impl:failed assignment=<token>"`

@@ -393,19 +393,6 @@ func ParseTS(v string) time.Time {
 	return t
 }
 
-func NextAttempt(existing []WorkerRuntime, beadID string) int {
-	max := 0
-	for _, rt := range existing {
-		if strings.TrimSpace(rt.BeadID) != strings.TrimSpace(beadID) {
-			continue
-		}
-		if rt.Attempt > max {
-			max = rt.Attempt
-		}
-	}
-	return max + 1
-}
-
 // filteredEnv returns os.Environ() with the named keys removed.
 // This prevents parent-session env vars (e.g. CLAUDECODE) from leaking
 // into spawned worker processes.

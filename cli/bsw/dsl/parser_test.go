@@ -15,7 +15,7 @@ workers:
   prompt: prompts/impl_worker.md
 transitions:
   "impl:done": needs-proof
-  "impl:error": needs-review
+  "impl:failed": needs-review
 timeout: 4h
 `)
 	spec, err := ParseBytes(src)

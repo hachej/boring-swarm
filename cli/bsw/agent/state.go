@@ -3,7 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -195,26 +194,3 @@ func asBool(v any) bool {
 	return ok && b
 }
 
-func LatestRunLog(logDir string) (string, error) {
-	entries, err := os.ReadDir(logDir)
-	if err != nil {
-		return "", err
-	}
-	var newest string
-	var newestTS time.Time
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		p := filepath.Join(logDir, e.Name())
-		st, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if newest == "" || st.ModTime().After(newestTS) {
-			newest = p
-			newestTS = st.ModTime()
-		}
-	}
-	return newest, nil
-}

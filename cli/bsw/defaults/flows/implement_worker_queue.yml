@@ -13,6 +13,6 @@ workers:
 
 transitions:
   "impl:done": needs-proof
-  "impl:error": needs-review
+  "impl:failed": needs-review
 
 timeout: 4h

@@ -55,8 +55,10 @@ type Snapshot struct {
 type RunState struct {
 	RunID     string `json:"run_id"`
 	Flow      string `json:"flow"`
+	FlowName  string `json:"flow_name,omitempty"`
 	Mode      string `json:"mode"`
 	StartedAt string `json:"started_at"`
+	PID       int    `json:"pid,omitempty"`
 	Status    string `json:"status"`
 }
 

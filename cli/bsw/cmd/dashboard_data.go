@@ -512,7 +512,7 @@ func isFailureTarget(label string) bool {
 
 func isFailureState(v string) bool {
 	s := strings.ToLower(strings.TrimSpace(v))
-	return strings.HasSuffix(s, ":failed") || strings.HasSuffix(s, ":error")
+	return strings.HasSuffix(s, ":failed")
 }
 
 func percentile(values []float64, p float64) float64 {

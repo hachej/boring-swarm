@@ -26,7 +26,7 @@ func (s CursorStore) dir() string {
 	return filepath.Join(s.projectRoot, ".bsw", "cursors")
 }
 
-func (s CursorStore) Ensure() error {
+func (s CursorStore) ensure() error {
 	return os.MkdirAll(s.dir(), 0o755)
 }
 
@@ -47,7 +47,7 @@ func (s CursorStore) Get(beadID string) int64 {
 }
 
 func (s CursorStore) Set(beadID string, id int64) error {
-	if err := s.Ensure(); err != nil {
+	if err := s.ensure(); err != nil {
 		return err
 	}
 	c := cursorFile{BeadID: strings.TrimSpace(beadID), LastComment: id, UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
