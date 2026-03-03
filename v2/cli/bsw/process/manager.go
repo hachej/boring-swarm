@@ -99,6 +99,7 @@ func (m Manager) Spawn(ctx context.Context, s SpawnSpec) (WorkerRuntime, error) 
 		return WorkerRuntime{}, err
 	}
 	cmd.Dir = m.projectRoot
+	cmd.Env = filteredEnv("CLAUDECODE")
 	cmd.Stdout = logWriter
 	cmd.Stderr = logWriter
 
@@ -403,6 +404,27 @@ func NextAttempt(existing []WorkerRuntime, beadID string) int {
 		}
 	}
 	return max + 1
+}
+
+// filteredEnv returns os.Environ() with the named keys removed.
+// This prevents parent-session env vars (e.g. CLAUDECODE) from leaking
+// into spawned worker processes.
+func filteredEnv(keys ...string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[strings.ToUpper(k)] = struct{}{}
+	}
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if idx := strings.IndexByte(e, '='); idx > 0 {
+			if _, ok := drop[strings.ToUpper(e[:idx])]; ok {
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func AgentName(runID, beadID string, attempt int) string {

@@ -4266,6 +4266,8 @@ func startProcessWorkerPrompt(cfg Config, role RoleConfig, st WorkerStatus, prom
 	cmd.Stdout = f
 	cmd.Stderr = f
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Strip CLAUDECODE env var so nested Claude Code sessions don't refuse to start.
+	cmd.Env = filteredEnv("CLAUDECODE")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -4277,6 +4279,25 @@ func startProcessWorkerPrompt(cfg Config, role RoleConfig, st WorkerStatus, prom
 	rt.LaunchedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	runtime[st.WorkerID] = rt
 	return nil
+}
+
+// filteredEnv returns os.Environ() with the named keys removed.
+func filteredEnv(keys ...string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[strings.ToUpper(k)] = struct{}{}
+	}
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if idx := strings.IndexByte(e, '='); idx > 0 {
+			if _, ok := drop[strings.ToUpper(e[:idx])]; ok {
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func splitPane(session string) (Pane, error) {
