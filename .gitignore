@@ -1,7 +1,5 @@
 # Compiled binaries
-v1/cli/bsw/bsw
-v1/dist/
-v2/cli/bsw/bsw
+cli/bsw/bsw
 
 # Build artifacts
 *.exe
