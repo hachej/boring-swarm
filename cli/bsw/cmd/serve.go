@@ -299,6 +299,70 @@ func runServe(args []string) error {
 		})
 	})
 
+	agentMailBase := strings.TrimSpace(os.Getenv("AGENT_MAIL_URL"))
+	if agentMailBase == "" {
+		agentMailBase = "http://127.0.0.1:8765"
+	}
+
+	mux.HandleFunc("/api/agentmail", func(w http.ResponseWriter, r *http.Request) {
+		limit := "200"
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			limit = raw
+		}
+		bodies := "true"
+		if raw := strings.TrimSpace(r.URL.Query().Get("include_bodies")); raw != "" {
+			bodies = raw
+		}
+		url := agentMailBase + "/mail/api/unified-inbox?limit=" + limit + "&include_bodies=" + bodies + "&include_projects=true"
+		resp, err := http.Get(url)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "agent-mail unreachable: " + err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+	})
+
+	mux.HandleFunc("/api/agentmail/send", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
+			return
+		}
+		var req struct {
+			Project    string   `json:"project"`
+			Recipients []string `json:"recipients"`
+			Subject    string   `json:"subject"`
+			BodyMD     string   `json:"body_md"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+		if strings.TrimSpace(req.Project) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "project is required"})
+			return
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"recipients": req.Recipients,
+			"subject":    req.Subject,
+			"body_md":    req.BodyMD,
+		})
+		url := agentMailBase + "/mail/" + strings.TrimSpace(req.Project) + "/overseer/send"
+		resp, err := http.Post(url, "application/json", strings.NewReader(string(payload)))
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "agent-mail unreachable: " + err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+	})
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
