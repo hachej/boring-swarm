@@ -21,6 +21,14 @@ func Validate(spec FlowSpec) error {
 	if strings.TrimSpace(spec.Source.Label) == "" {
 		return fmt.Errorf("source.label is required")
 	}
+	switch spec.Source.CanonicalSelector() {
+	case "queue", "graph":
+		// valid
+	default:
+		if strings.TrimSpace(spec.Source.Selector) != "" {
+			return fmt.Errorf("source.selector must be queue or graph (aliases: graph-aware, robot-next)")
+		}
+	}
 
 	if spec.Workers.Count <= 0 {
 		return fmt.Errorf("workers.count must be > 0")

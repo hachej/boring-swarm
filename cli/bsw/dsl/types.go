@@ -20,7 +20,8 @@ type FlowSpec struct {
 }
 
 type SourceSpec struct {
-	Label string `yaml:"label"`
+	Label    string `yaml:"label"`
+	Selector string `yaml:"selector,omitempty"`
 }
 
 type WorkerSpec struct {
@@ -67,4 +68,17 @@ func (f FlowSpec) TimeoutDuration() (time.Duration, error) {
 
 func canonicalEvent(in string) string {
 	return strings.ToLower(strings.TrimSpace(in))
+}
+
+func (s SourceSpec) CanonicalSelector() string {
+	v := strings.ToLower(strings.TrimSpace(s.Selector))
+	if v == "" {
+		return "queue"
+	}
+	switch v {
+	case "graph", "graph-aware", "robot-next":
+		return "graph"
+	default:
+		return v
+	}
 }

@@ -162,6 +162,141 @@ func (c Client) ListComments(ctx context.Context, id string) ([]Comment, error) 
 	return out, nil
 }
 
+func (c Client) ReadyIssueIDs(ctx context.Context, label string, unassignedOnly bool) (map[string]struct{}, error) {
+	args := readyArgs(label, unassignedOnly)
+	out, err := c.runRaw(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	ids := issueIDsFromPayload(out)
+	ready := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		ready[id] = struct{}{}
+	}
+	return ready, nil
+}
+
+func readyArgs(label string, unassignedOnly bool) []string {
+	args := []string{"ready", "--json", "--limit", "0"}
+	if strings.TrimSpace(label) != "" {
+		args = append(args, "--label", strings.TrimSpace(label))
+	}
+	if unassignedOnly {
+		args = append(args, "--unassigned")
+	}
+	return args
+}
+
+func (c Client) RobotNextID(ctx context.Context, label string) (string, bool, error) {
+	args := []string{"--robot-next"}
+	if strings.TrimSpace(label) != "" {
+		args = append(args, "--robot-by-label", strings.TrimSpace(label))
+	}
+	out, err := c.execOnce(ctx, "bv", args)
+	if err != nil {
+		return "", false, err
+	}
+	ids := issueIDsFromPayload(out)
+	if len(ids) == 0 {
+		return "", false, nil
+	}
+	return ids[0], true, nil
+}
+
+func issueIDsFromPayload(raw []byte) []string {
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return nil
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(text), &decoded); err == nil {
+		return dedupeIssueIDs(extractIssueIDsFromAny(decoded))
+	}
+	return dedupeIssueIDs(extractIssueIDsFromText(text))
+}
+
+func extractIssueIDsFromAny(v any) []string {
+	switch t := v.(type) {
+	case map[string]any:
+		out := []string{}
+		for _, key := range []string{"id", "issue_id", "bead_id", "issueId", "beadId"} {
+			if raw, ok := t[key]; ok {
+				s, _ := raw.(string)
+				s = strings.TrimSpace(s)
+				if looksLikeIssueID(s) {
+					out = append(out, s)
+				}
+			}
+		}
+		keys := make([]string, 0, len(t))
+		for key := range t {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			out = append(out, extractIssueIDsFromAny(t[key])...)
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			out = append(out, extractIssueIDsFromAny(item)...)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func extractIssueIDsFromText(text string) []string {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return false
+		case r >= 'A' && r <= 'Z':
+			return false
+		case r >= '0' && r <= '9':
+			return false
+		case r == '-', r == '_', r == '.':
+			return false
+		default:
+			return true
+		}
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if looksLikeIssueID(field) {
+			out = append(out, strings.TrimSpace(field))
+		}
+	}
+	return out
+}
+
+func dedupeIssueIDs(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func looksLikeIssueID(v string) bool {
+	s := strings.ToLower(strings.TrimSpace(v))
+	return strings.HasPrefix(s, "bd-") && len(s) > 3
+}
+
 func (c Client) runJSON(ctx context.Context, args []string, v any) error {
 	out, err := c.runRaw(ctx, args)
 	if err != nil {
@@ -183,15 +318,17 @@ func (c Client) runRaw(ctx context.Context, args []string) ([]byte, error) {
 	if err == nil {
 		return out, nil
 	}
-	// Backward compatibility for older br versions that don't support the
-	// global no-auto-* flags. Retry without flags if needed.
+	// Retry once without bsw-added global flags when the flags are unsupported
+	// or when no-auto-import mode causes JSONL/DB freshness desync.
 	var cmdErr *CommandError
-	if errors.As(err, &cmdErr) && len(runArgs) != len(args) && unsupportedGlobalFlags(cmdErr.Output) {
-		out2, err2 := c.execOnce(ctx, bin, args)
-		if err2 == nil {
-			return out2, nil
+	if errors.As(err, &cmdErr) && len(runArgs) != len(args) {
+		if unsupportedGlobalFlags(cmdErr.Output) || autoImportDisabledDesync(cmdErr.Output) {
+			out2, err2 := c.execOnce(ctx, bin, args)
+			if err2 == nil {
+				return out2, nil
+			}
+			return nil, err2
 		}
-		return nil, err2
 	}
 	return nil, err
 }
@@ -212,19 +349,23 @@ func (c Client) execOnce(ctx context.Context, bin string, args []string) ([]byte
 			code = exitErr.ExitCode()
 		}
 		all := strings.TrimSpace(strings.Join([]string{stdout.String(), stderr.String()}, "\n"))
+		if all == "" {
+			all = strings.TrimSpace(err.Error())
+		}
 		return nil, &CommandError{Args: append([]string(nil), args...), ExitCode: code, Output: all}
 	}
 	return stdout.Bytes(), nil
 }
 
 func (c Client) withBRGlobalFlags(args []string) []string {
-	// Default to SQLite-native mode: avoid auto JSONL import/flush paths that
-	// can fail independently of the DB and block queue operations.
+	// Keep writes DB-first and avoid flush coupling by default. Do NOT disable
+	// auto-import here; workers and runner transitions can legitimately make
+	// JSONL newer than DB between cycles.
 	if !useSQLiteNativeBR() {
 		return args
 	}
-	out := make([]string, 0, len(args)+2)
-	out = append(out, "--no-auto-import", "--no-auto-flush")
+	out := make([]string, 0, len(args)+1)
+	out = append(out, "--no-auto-flush")
 	out = append(out, args...)
 	return out
 }
@@ -253,6 +394,15 @@ func unsupportedGlobalFlags(output string) bool {
 		strings.Contains(lower, "unrecognized option") ||
 		strings.Contains(lower, "unknown option") ||
 		strings.Contains(lower, "found argument")
+}
+
+func autoImportDisabledDesync(output string) bool {
+	lower := strings.ToLower(strings.TrimSpace(output))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "jsonl is newer than the database") &&
+		strings.Contains(lower, "auto-import disabled")
 }
 
 type CommandError struct {

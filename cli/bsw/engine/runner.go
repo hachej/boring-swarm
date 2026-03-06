@@ -304,21 +304,22 @@ func (r *Runner) cycle(ctx context.Context) (int, int, error) {
 
 	allowed := r.spec.AllowedEvents()
 	promptPath := dsl.ResolvePromptPath(r.projectRoot, r.spec.Workers.Prompt)
-	for _, issue := range queueBeads {
+	candidates, err := r.spawnCandidates(ctx, queueBeads)
+	if err != nil {
+		return len(queueBeads), activeWorkers, err
+	}
+	for _, issue := range candidates {
 		if activeWorkers >= r.spec.Workers.Count {
 			break
 		}
-		if strings.TrimSpace(issue.Assignee) != "" {
-			continue
-		}
 		attempt, err := r.attempts.Next(issue.ID)
 		if err != nil {
-			return len(queueBeads), activeWorkers, err
+			return len(candidates), activeWorkers, err
 		}
 		agentName := process.AgentName(r.runID, issue.ID, attempt)
 		claimed, err := r.client.Claim(ctx, issue.ID, agentName)
 		if err != nil {
-			return len(queueBeads), activeWorkers, err
+			return len(candidates), activeWorkers, err
 		}
 		if !claimed {
 			r.emitter.Emit(Event{Event: "claim_conflict", RunID: r.runID, BeadID: issue.ID, Agent: agentName})
@@ -349,7 +350,7 @@ func (r *Runner) cycle(ctx context.Context) (int, int, error) {
 		if err := r.registry.Save(rt); err != nil {
 			_ = process.Terminate(rt.PID)
 			_ = r.client.ClearAssigneeIfMatch(ctx, issue.ID, agentName, r.actor)
-			return len(queueBeads), activeWorkers, err
+			return len(candidates), activeWorkers, err
 		}
 		activeWorkers++
 		r.emitter.Emit(Event{
@@ -365,7 +366,105 @@ func (r *Runner) cycle(ctx context.Context) (int, int, error) {
 		})
 	}
 
-	return len(queueBeads), activeWorkers, nil
+	return len(candidates), activeWorkers, nil
+}
+
+func (r *Runner) spawnCandidates(ctx context.Context, queueBeads []beads.Issue) ([]beads.Issue, error) {
+	candidates := unassignedIssues(queueBeads)
+	if len(candidates) == 0 || !r.useGraphAwareImplSelector() {
+		return candidates, nil
+	}
+
+	readyIDs, err := r.client.ReadyIssueIDs(ctx, r.spec.Source.Label, true)
+	if err != nil {
+		r.emitter.Emit(Event{
+			Event:   "selector_fallback",
+			RunID:   r.runID,
+			Queue:   r.spec.Name,
+			Details: "graph-aware ready filter failed; using queue order: " + err.Error(),
+		})
+		return candidates, nil
+	}
+
+	readyCandidates := filterIssuesByIDSet(candidates, readyIDs)
+	if len(readyCandidates) == 0 {
+		// For implementation queues, avoid assigning blocked beads when
+		// graph-ready work is empty.
+		r.emitter.Emit(Event{
+			Event: "queue_waiting_on_dependencies",
+			RunID: r.runID,
+			Queue: r.spec.Name,
+			Details: fmt.Sprintf(
+				"graph selector found 0 ready candidates (unassigned=%d, source_label=%s)",
+				len(candidates),
+				strings.TrimSpace(r.spec.Source.Label),
+			),
+		})
+		return []beads.Issue{}, nil
+	}
+
+	nextID, ok, err := r.client.RobotNextID(ctx, r.spec.Source.Label)
+	if err != nil {
+		r.emitter.Emit(Event{
+			Event:   "selector_fallback",
+			RunID:   r.runID,
+			Queue:   r.spec.Name,
+			Details: "graph-aware top-pick failed; using ready order: " + err.Error(),
+		})
+		return readyCandidates, nil
+	}
+	if ok {
+		moveIssueToFront(readyCandidates, nextID)
+	}
+	return readyCandidates, nil
+}
+
+func (r *Runner) useGraphAwareImplSelector() bool {
+	return r.spec.Source.CanonicalSelector() == "graph"
+}
+
+func unassignedIssues(queueBeads []beads.Issue) []beads.Issue {
+	out := make([]beads.Issue, 0, len(queueBeads))
+	for _, issue := range queueBeads {
+		if strings.TrimSpace(issue.Assignee) != "" {
+			continue
+		}
+		out = append(out, issue)
+	}
+	return out
+}
+
+func filterIssuesByIDSet(items []beads.Issue, ids map[string]struct{}) []beads.Issue {
+	if len(items) == 0 || len(ids) == 0 {
+		return nil
+	}
+	out := make([]beads.Issue, 0, len(items))
+	for _, issue := range items {
+		if _, ok := ids[issue.ID]; ok {
+			out = append(out, issue)
+		}
+	}
+	return out
+}
+
+func moveIssueToFront(items []beads.Issue, id string) {
+	if len(items) <= 1 {
+		return
+	}
+	target := strings.TrimSpace(id)
+	if target == "" {
+		return
+	}
+	for i := range items {
+		if strings.TrimSpace(items[i].ID) != target {
+			continue
+		}
+		if i == 0 {
+			return
+		}
+		items[0], items[i] = items[i], items[0]
+		return
+	}
 }
 
 func (r *Runner) processStateComments(ctx context.Context, byBead map[string]process.WorkerRuntime) error {
