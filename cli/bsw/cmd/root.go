@@ -17,6 +17,8 @@ func Execute(args []string) error {
 		return runDoctor(args[1:])
 	case "run":
 		return runQueue(args[1:])
+	case "pipeline":
+		return runPipeline(args[1:])
 	case "status":
 		return runStatus(args[1:])
 	case "serve":
@@ -37,16 +39,24 @@ func Execute(args []string) error {
 }
 
 func printUsage() {
-	fmt.Print(`bsw v2 - queue orchestration primitives
+	fmt.Print(`bsw - queue orchestration primitives
 
 Usage:
   bsw init [--project .]
   bsw doctor <flow.yaml> [--project .]
   bsw run <flow.yaml> [--project .] [--mode oneshot|service] [--actor bsw] [--poll 2s]
+  bsw pipeline <name> [--project .] [--actor bsw] [--poll 2s]
   bsw status [--project .] --json [--explain]
   bsw serve [--project .] [--addr 127.0.0.1:8787] [--flow flows/implement_worker_queue.yml]
   bsw ping <bead-id> [--project .] [--actor bsw]
   bsw kill <bead-id> [--project .] [--actor bsw]
   bsw stop [--project .] [--actor bsw]
+
+Pipelines (bsw pipeline <name>):
+  plan-review    Plan refinement with cross-provider review loop
+  plan-split     Plan decomposition into beads with multi-provider validation
+  impl           Implementation with parallel workers + cross-provider review
+  plan-verify    Post-impl plan verification loop (verify → new beads → impl → re-verify)
+  full           Full cycle: plan-review → plan-split → impl → plan-verify (loops until done)
 `)
 }

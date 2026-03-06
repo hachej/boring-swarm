@@ -162,7 +162,7 @@ func buildProviderCommand(provider, model, effort, systemPrompt, userPrompt, pro
 		return cmd, stdin, nil
 	case "claude":
 		bin := providerBinary("claude")
-		args := []string{"-p", "--verbose", "--output-format", "stream-json", "--model", model}
+		args := []string{"-p", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions", "--model", model}
 		if strings.TrimSpace(effort) != "" {
 			args = append(args, "--effort", strings.TrimSpace(effort))
 		}
@@ -217,18 +217,7 @@ Task contract:
    - Do NOT write directly to .beads/beads.db.
 7) Do not mutate labels or assignee.
 8) Exit immediately after posting the terminal STATE comment.`)
-	if isProofQueue(payload.SourceLabel) {
-		body += "\n\nProof queue defaults:\n" +
-			"- Run targeted bead checks first (single test/file/grep for the failing location).\n" +
-			"- Escalate to full matrix/full-suite only if acceptance criteria explicitly require it, or targeted evidence is inconclusive.\n" +
-			"- If targeted check clearly reproduces the failure, post terminal proof:failed without broad reruns."
-	}
 	return body
-}
-
-func isProofQueue(sourceLabel string) bool {
-	label := strings.TrimSpace(strings.ToLower(sourceLabel))
-	return label == "needs-proof" || label == "needs_proof" || label == "proof"
 }
 
 func workerLogMaxLineBytes() int {

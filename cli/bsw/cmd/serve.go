@@ -386,8 +386,6 @@ func resolveFlowForServe(projectRoot, override string) (string, *dsl.FlowSpec, e
 	}
 	candidates = append(candidates,
 		filepath.Join(projectRoot, "flows", "implement_worker_queue.yml"),
-		filepath.Join(projectRoot, "flows", "proof_worker_queue.yml"),
-		filepath.Join(projectRoot, "flows", "review_worker_queue.yml"),
 	)
 
 	seen := map[string]struct{}{}
@@ -743,10 +741,8 @@ func augmentSnapshotForDashboard(ctx context.Context, projectRoot string, client
 
 func dashboardQueueLabels(projectRoot string, snap status.Snapshot) []string {
 	labels := map[string]struct{}{
-		"needs-impl":   {},
-		"needs-proof":  {},
-		"needs-review": {},
-		"closed":       {},
+		"needs-impl": {},
+		"closed":     {},
 	}
 	for label := range snap.Queues {
 		if strings.TrimSpace(label) == "" {

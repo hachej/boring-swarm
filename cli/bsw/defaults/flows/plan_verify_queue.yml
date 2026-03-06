@@ -1,11 +1,10 @@
 version: 1
 name: plan_verify_workers
 
-# ORCHESTRATOR: Run this queue AFTER all implementation queues have drained.
-# Precondition: no beads with needs-impl, needs-proof, or needs-review labels.
-# The worker checks if the plan was fully delivered and creates follow-up
-# beads (labeled needs-impl) if gaps are found.
-# If plan-verify:failed, re-run the implementation pipeline then re-verify.
+# Run AFTER all implementation beads have drained (no beads with needs-impl label).
+# The worker compares implementation against the plan using cross-provider review.
+# If plan-verify:failed, the worker creates follow-up beads (labeled needs-impl).
+# Re-run impl queue, then re-run this queue — the cycle repeats until plan passes.
 
 source:
   label: needs-plan-verify

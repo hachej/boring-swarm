@@ -7,6 +7,7 @@ func TestParseValidSpec(t *testing.T) {
 name: implementation_workers
 source:
   label: needs-impl
+  selector: graph-aware
 workers:
   count: 2
   provider: codex
@@ -14,8 +15,8 @@ workers:
   effort: high
   prompt: prompts/impl_worker.md
 transitions:
-  "impl:done": needs-proof
-  "impl:failed": needs-review
+  "impl:done": closed
+  "impl:failed": needs-impl
 timeout: 4h
 `)
 	spec, err := ParseBytes(src)
@@ -27,6 +28,9 @@ timeout: 4h
 	}
 	if len(spec.AllowedEvents()) != 2 {
 		t.Fatalf("expected 2 allowed events")
+	}
+	if got := spec.Source.CanonicalSelector(); got != "graph" {
+		t.Fatalf("expected canonical selector graph, got %q", got)
 	}
 }
 
@@ -41,7 +45,7 @@ workers:
   model: gpt-5-codex
   prompt: prompts/impl_worker.md
 transitions:
-  "impl:done": needs-proof
+  "impl:done": closed
 extra_field: nope
 `)
 	if _, err := ParseBytes(src); err == nil {
@@ -60,7 +64,7 @@ workers:
   model: gpt-5-codex
   prompt: prompts/impl_worker.md
 transitions:
-  "impl:done": needs-proof
+  "impl:done": closed
 `)
 	if _, err := ParseBytes(src); err == nil {
 		t.Fatalf("expected provider validation error")
@@ -78,7 +82,7 @@ workers:
   model: claude-sonnet-4-5
   prompt: prompts/impl_worker.md
 transitions:
-  "impl:done": needs-proof
+  "impl:done": closed
 `)
 	if _, err := ParseBytes(src); err != nil {
 		t.Fatalf("expected claude-code to pass validation, got: %v", err)
@@ -96,9 +100,28 @@ workers:
   model: claude-sonnet-4-5
   prompt: prompts/impl_worker.md
 transitions:
-  "impl:done": needs-proof
+  "impl:done": closed
 `)
 	if _, err := ParseBytes(src); err != nil {
 		t.Fatalf("expected ccc alias to pass validation, got: %v", err)
+	}
+}
+
+func TestValidateSourceSelector(t *testing.T) {
+	src := []byte(`version: 1
+name: implementation_workers
+source:
+  label: needs-impl
+  selector: banana
+workers:
+  count: 2
+  provider: codex
+  model: gpt-5-codex
+  prompt: prompts/impl_worker.md
+transitions:
+  "impl:done": closed
+`)
+	if _, err := ParseBytes(src); err == nil {
+		t.Fatalf("expected selector validation error")
 	}
 }

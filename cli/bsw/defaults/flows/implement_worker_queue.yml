@@ -3,6 +3,7 @@ name: implementation_workers
 
 source:
   label: needs-impl
+  selector: graph-aware
 
 workers:
   count: 3
@@ -12,7 +13,7 @@ workers:
   prompt: prompts/implement_worker_prompt.md
 
 transitions:
-  "impl:done": needs-proof
-  "impl:failed": needs-review
+  "impl:done": closed
+  "impl:failed": needs-impl
 
 timeout: 4h

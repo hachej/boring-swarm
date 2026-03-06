@@ -1,0 +1,22 @@
+version: 1
+name: plan_decompose_workers
+
+# Run AFTER plan refinement.
+# The worker decomposes a refined plan into implementation beads.
+# Uses cross-provider review to validate the decomposition.
+
+source:
+  label: needs-plan-decompose
+
+workers:
+  count: 2
+  provider: claude
+  model: claude-opus-4
+  effort: high
+  prompt: prompts/plan_decompose_prompt.md
+
+transitions:
+  "plan-decompose:done": needs-impl
+  "plan-decompose:rework": needs-plan-decompose
+
+timeout: 2h

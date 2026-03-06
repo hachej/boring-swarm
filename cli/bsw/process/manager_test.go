@@ -53,6 +53,9 @@ func TestBuildProviderCommandClaudeCodeAlias(t *testing.T) {
 	if !hasArgPair(cmd.Args, "--effort", "medium") {
 		t.Fatalf("expected --effort medium for claude provider, args=%v", cmd.Args)
 	}
+	if !hasArg(cmd.Args, "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions for claude provider, args=%v", cmd.Args)
+	}
 }
 
 func TestBuildProviderCommandCCCAlias(t *testing.T) {
@@ -65,19 +68,6 @@ func TestBuildProviderCommandCCCAlias(t *testing.T) {
 	}
 }
 
-func TestBuildUserPromptAddsProofDefaults(t *testing.T) {
-	p := buildUserPrompt(RuntimeContextPayload{
-		BeadID:          "bd-1",
-		SourceLabel:     "needs-proof",
-		AssignmentToken: "run-1:bd-1:1",
-	})
-	if !strings.Contains(p, "Proof queue defaults:") {
-		t.Fatalf("expected proof defaults section in prompt")
-	}
-	if !strings.Contains(p, "Infra reliability checks:") {
-		t.Fatalf("expected infra reliability checks section in prompt")
-	}
-}
 
 func TestCappedLineWriterTruncatesLongLine(t *testing.T) {
 	dst := &bytes.Buffer{}
@@ -101,6 +91,15 @@ func TestCappedLineWriterTruncatesLongLine(t *testing.T) {
 func hasArgPair(args []string, key, value string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == key && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArg(args []string, key string) bool {
+	for _, arg := range args {
+		if arg == key {
 			return true
 		}
 	}
