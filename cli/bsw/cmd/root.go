@@ -34,6 +34,8 @@ func Execute(args []string) error {
 		return runDoctor(args[1:])
 	case "prompt":
 		return runPrompt(args[1:])
+	case "register":
+		return runRegister(args[1:])
 	case "multi-status":
 		return runMultiStatus(args[1:])
 	case "help", "-h", "--help":
@@ -60,14 +62,16 @@ Commands:
   bsw nudge <worker-id>             Send "continue" to stale tmux worker
   bsw attach <worker-id>            Attach to tmux worker
   bsw doctor [--fix]                Check setup
+  bsw register                      Register as orchestrator (agent-mail + Slack)
 
 Workers are codex agents. They pick their own beads via br robot next.
 Just spawn them — don't configure anything.
 
-Spawn 2 workers:
-  1. br list --status open  (check there is work)
-  2. bsw spawn
-  3. bsw spawn
+START:
+  1. bsw register              (register as orchestrator, set up Slack)
+  2. br list --status open      (check there is work)
+  3. bsw spawn                  (spawn workers)
+  4. bsw spawn
 
 MONITOR LOOP — after spawning, start a recurring check:
 
