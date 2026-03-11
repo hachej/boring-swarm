@@ -129,6 +129,18 @@ func runSpawn(args []string) error {
 		return fmt.Errorf("save registry: %w", err)
 	}
 
+	// Announce registration to operator (shows up in Slack via bridge)
+	if amReg != nil {
+		absRoot, _ := filepath.Abs(root)
+		operator := process.OperatorName()
+		subject := fmt.Sprintf("%s is online", amReg.Name)
+		body := fmt.Sprintf("**%s** (%s, %s) spawned in `%s` mode — ready to work.",
+			amReg.Name, *personaName, p.Provider, *mode)
+		if err := amCfg.SendMessage(absRoot, amReg.Name, operator, subject, body); err != nil {
+			fmt.Printf("  warn: announcement failed: %v\n", err)
+		}
+	}
+
 	fmt.Printf("Spawned worker %s (pid=%d, mode=%s, yolo)\n", *workerID, entry.PID, entry.Mode)
 	if entry.Pane != "" {
 		fmt.Printf("  tmux pane: %s (attach with: bsw attach %s)\n", entry.Pane, *workerID)

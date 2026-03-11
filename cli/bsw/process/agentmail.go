@@ -165,6 +165,27 @@ func (c AgentMailConfig) call(tool string, args map[string]any) (map[string]any,
 	return result, nil
 }
 
+// SendMessage sends a message from one agent to another via Agent Mail.
+func (c AgentMailConfig) SendMessage(projectKey, from, to, subject, body string) error {
+	_, err := c.call("send_message", map[string]any{
+		"project_key": projectKey,
+		"sender_name": from,
+		"to":          []string{to},
+		"subject":     subject,
+		"body_md":     body,
+	})
+	return err
+}
+
+// OperatorName returns the configured operator agent name.
+// Reads from AGENT_MAIL_OPERATOR env var, defaults to "GoldOwl".
+func OperatorName() string {
+	if v := os.Getenv("AGENT_MAIL_OPERATOR"); v != "" {
+		return v
+	}
+	return "GoldOwl"
+}
+
 // AgentMailEnv returns environment variables for the worker process.
 func AgentMailEnv(projectKey, agentName string, cfg AgentMailConfig) []string {
 	return []string{
@@ -173,6 +194,7 @@ func AgentMailEnv(projectKey, agentName string, cfg AgentMailConfig) []string {
 		"AGENT_MAIL_URL=" + cfg.URL,
 		"AGENT_MAIL_TOKEN=" + cfg.Token,
 		"AGENT_MAIL_INTERVAL=120",
+		"AGENT_MAIL_OPERATOR=" + OperatorName(),
 	}
 }
 
