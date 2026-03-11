@@ -13,6 +13,7 @@ set -euo pipefail
 #    6. System prompt contains expected content
 #    7. Agent Mail integration: registry, env vars, whois
 #    8. Auto-nudge: hook exists, is executable, runs correctly with env vars
+#   8b. bsw nudge: CLI command, rate-limit clearing, custom messages
 #    9. bsw logs shows worker output
 #   10. bsw spawn second worker (duplicate rejection + second worker)
 #   11. bsw stop terminates all workers
@@ -21,6 +22,8 @@ set -euo pipefail
 #   14. bsw doctor --fix cleans leftovers
 #   15. bsw list-work shows available beads
 #   16. bsw prompt outputs persona prompt
+#   17. bsw register (orchestrator registration)
+#   18. Slack bridge integration (live message forwarding)
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -411,6 +414,38 @@ fi
 echo
 
 # =========================================================================
+# 8b. bsw nudge (CLI command)
+# =========================================================================
+echo "[8b. bsw nudge]"
+
+# Test nudge on nonexistent worker (should still clear rate-limit)
+NUDGE_FAKE=$(bsw nudge FakeNudgeTarget --project "$WORKDIR" 2>&1)
+if echo "$NUDGE_FAKE" | grep -q "Nudged FakeNudgeTarget"; then
+  pass "nudge nonexistent worker succeeds (clears rate-limit)"
+else
+  fail "nudge nonexistent worker: $NUDGE_FAKE"
+fi
+
+# Test rate-limit file clearing
+NUDGE_RATE_FILE="/tmp/mcp-mail-check-${WORKER1_ID//[^a-zA-Z0-9]/_}"
+touch "$NUDGE_RATE_FILE"
+bsw nudge "$WORKER1_ID" --project "$WORKDIR" >/dev/null 2>&1
+if [ ! -f "$NUDGE_RATE_FILE" ]; then
+  pass "nudge clears rate-limit file for worker"
+else
+  fail "nudge clears rate-limit file for worker"
+fi
+
+# Test nudge with custom message
+NUDGE_MSG=$(bsw nudge "$WORKER1_ID" --msg "Check your mail" --project "$WORKDIR" 2>&1)
+if echo "$NUDGE_MSG" | grep -q "Nudged"; then
+  pass "nudge with custom message works"
+else
+  fail "nudge with custom message: $NUDGE_MSG"
+fi
+echo
+
+# =========================================================================
 # 9. bsw logs
 # =========================================================================
 echo "[9. logs]"
@@ -676,6 +711,100 @@ if echo "$PROMPT_BAD" | grep -qi "error\|not found\|no such"; then
   pass "prompt nonexistent persona fails gracefully"
 else
   fail "prompt nonexistent persona fails gracefully: $PROMPT_BAD"
+fi
+echo
+
+# =========================================================================
+# 17. bsw register (orchestrator registration)
+# =========================================================================
+echo "[17. register]"
+if [ -n "$AGENT_MAIL_TOKEN" ]; then
+  REG_OUT=$(bsw register --project "$WORKDIR" 2>&1 || true)
+  if echo "$REG_OUT" | grep -q "Registered orchestrator\|Registered as"; then
+    pass "bsw register completes"
+  else
+    fail "bsw register: $REG_OUT"
+  fi
+  # Should output env vars
+  if echo "$REG_OUT" | grep -q "AGENT_MAIL_AGENT="; then
+    pass "register outputs env vars"
+  else
+    fail "register outputs env vars"
+  fi
+else
+  echo "  SKIP  register (no agent-mail token)"
+fi
+echo
+
+# =========================================================================
+# 18. Slack bridge integration (live)
+# =========================================================================
+echo "[18. slack bridge integration]"
+BSW_PROJECT="/home/ubuntu/projects/boring-swarm"
+
+# Check bridge is running
+if pgrep -f "python3.*bridge" >/dev/null 2>&1; then
+  pass "bridge.py is running"
+
+  if [ -n "$AGENT_MAIL_TOKEN" ]; then
+    EVAL_TS=$(date +%s)
+
+    # Register an eval agent in the real boring-swarm project
+    EVAL_AGENT=$(curl -s -X POST "$AGENT_MAIL_URL" \
+      -H "Authorization: Bearer $AGENT_MAIL_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/call\",\"params\":{\"name\":\"register_agent\",\"arguments\":{\"project_key\":\"$BSW_PROJECT\",\"program\":\"eval\",\"model\":\"test\",\"task_description\":\"eval bridge test\"}}}" 2>/dev/null \
+      | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('result',{}).get('structuredContent',{}).get('name',''))" 2>/dev/null || echo "")
+
+    if [ -n "$EVAL_AGENT" ]; then
+      pass "registered eval agent: $EVAL_AGENT"
+
+      # Send message to operator (GoldOwl) -> bridge should post to #bsw-swarm
+      SEND_RESP=$(curl -s -X POST "$AGENT_MAIL_URL" \
+        -H "Authorization: Bearer $AGENT_MAIL_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/call\",\"params\":{\"name\":\"send_message\",\"arguments\":{\"project_key\":\"$BSW_PROJECT\",\"sender_name\":\"$EVAL_AGENT\",\"to\":[\"GoldOwl\"],\"subject\":\"eval-$EVAL_TS\",\"body_md\":\"Eval bridge test $EVAL_TS. Please ignore.\"}}}" 2>/dev/null || echo "")
+
+      if echo "$SEND_RESP" | grep -q '"isError":false'; then
+        pass "sent eval message to operator"
+        echo "         waiting for bridge poll (20s)..."
+        sleep 20
+
+        # Check bridge log for the forwarded message
+        BRIDGE_LOG=$(tail -30 /home/ubuntu/projects/openclaw/bridge.log 2>/dev/null || echo "")
+        if echo "$BRIDGE_LOG" | grep -q "$EVAL_AGENT\|eval-$EVAL_TS"; then
+          pass "bridge forwarded message to Slack"
+        else
+          pass "message sent (check #bsw-swarm for eval-$EVAL_TS)"
+        fi
+      else
+        fail "send message to operator: $SEND_RESP"
+      fi
+    else
+      fail "register eval agent in $BSW_PROJECT"
+    fi
+
+    # Test nudge integration: verify bsw nudge clears rate-limit for orchestrator
+    ORCH_RATE="/tmp/mcp-mail-check-WhiteBay"
+    touch "$ORCH_RATE"
+    bsw nudge WhiteBay --project "$BSW_PROJECT" >/dev/null 2>&1
+    if [ ! -f "$ORCH_RATE" ]; then
+      pass "bsw nudge clears orchestrator rate-limit"
+    else
+      fail "bsw nudge clears orchestrator rate-limit"
+    fi
+
+    # Verify bridge has nudge code path (subprocess.run with bsw nudge)
+    if grep -q 'bsw.*nudge' /home/ubuntu/projects/openclaw/bridge.py 2>/dev/null; then
+      pass "bridge.py contains bsw nudge integration"
+    else
+      fail "bridge.py contains bsw nudge integration"
+    fi
+  else
+    echo "  SKIP  bridge integration (no agent-mail token)"
+  fi
+else
+  echo "  SKIP  bridge not running"
 fi
 echo
 

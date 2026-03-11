@@ -3,7 +3,9 @@ package cmd
 import (
 	"flag"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 
 	"boring-swarm/cli/bsw/process"
 )
@@ -11,7 +13,7 @@ import (
 func runNudge(args []string) error {
 	fs := flag.NewFlagSet("nudge", flag.ContinueOnError)
 	project := fs.String("project", ".", "project root directory")
-	msg := fs.String("msg", "You appear stale. Continue working on your current bead.", "message to send")
+	msg := fs.String("msg", "You have messages. Check your inbox (fetch_inbox).", "message to send")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -24,21 +26,39 @@ func runNudge(args []string) error {
 		return err
 	}
 
+	// Always clear the rate-limit file so the next hook check is immediate
+	clearNudgeRateLimit(workerID)
+
 	reg := process.NewRegistry(root)
 	entry, err := reg.Load(workerID)
 	if err != nil {
-		return fmt.Errorf("worker %s not found in registry", workerID)
+		// Not in registry — still cleared rate-limit, that's enough
+		fmt.Printf("Nudged %s (cleared rate-limit)\n", workerID)
+		return nil
 	}
 
 	if entry.Mode == "tmux" && entry.Pane != "" {
-		// Send keystrokes to the tmux pane
 		cmd := exec.Command("tmux", "send-keys", "-t", entry.Pane, *msg, "Enter")
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("tmux send-keys failed: %w", err)
 		}
-		fmt.Printf("Nudged worker %s (tmux pane %s)\n", workerID, entry.Pane)
+		fmt.Printf("Nudged worker %s (tmux pane %s + cleared rate-limit)\n", workerID, entry.Pane)
 	} else {
-		fmt.Printf("Worker %s is in bg mode — cannot nudge (kill and respawn instead)\n", workerID)
+		fmt.Printf("Nudged worker %s (cleared rate-limit)\n", workerID)
 	}
 	return nil
+}
+
+// clearNudgeRateLimit removes the rate-limit file for check_inbox.sh
+// so the next hook invocation checks the inbox immediately.
+func clearNudgeRateLimit(agentName string) {
+	// Match the rate-limit file naming from check_inbox.sh:
+	// RATE_FILE="/tmp/mcp-mail-check-${AGENT//[^a-zA-Z0-9]/_}"
+	safe := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, agentName)
+	os.Remove("/tmp/mcp-mail-check-" + safe)
 }
