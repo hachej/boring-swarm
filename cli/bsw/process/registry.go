@@ -5,38 +5,42 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
-	"time"
 )
+
+var validBeadID = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// ValidateBeadID rejects bead IDs that could cause path traversal or other issues.
+func ValidateBeadID(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("bead ID is empty")
+	}
+	if !validBeadID.MatchString(id) {
+		return fmt.Errorf("bead ID %q contains invalid characters (allowed: a-z A-Z 0-9 . _ -)", id)
+	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("bead ID %q contains '..'", id)
+	}
+	return nil
+}
+
+type WorkerEntry struct {
+	BeadID      string `json:"bead_id"`
+	Persona     string `json:"persona"`
+	Provider    string `json:"provider"`
+	Mode        string `json:"mode"` // "tmux" | "bg"
+	PID         int    `json:"pid"`
+	Pane        string `json:"pane,omitempty"`
+	StartedAt   string `json:"started_at"`
+	StartTimeNs int64  `json:"start_time_ns"` // process start time from /proc for PID reuse detection
+	Log         string `json:"log"`
+}
 
 type Registry struct {
 	projectRoot string
-}
-
-type WorkerRuntime struct {
-	BeadID                 string   `json:"bead_id"`
-	Role                   string   `json:"role"`
-	PID                    int      `json:"pid"`
-	Provider               string   `json:"provider"`
-	SessionRef             string   `json:"session_ref,omitempty"`
-	ResumeCommand          string   `json:"resume_command,omitempty"`
-	AgentName              string   `json:"agent_name"`
-	AssignmentToken        string   `json:"assignment_token"`
-	SourceLabel            string   `json:"source_label"`
-	AllowedTransitions     []string `json:"allowed_transitions"`
-	RunID                  string   `json:"run_id"`
-	Attempt                int      `json:"attempt"`
-	StartedAt              string   `json:"started_at"`
-	LastProgressTS         string   `json:"last_progress_ts,omitempty"`
-	LastProcessedCommentID int64    `json:"last_processed_comment_id,omitempty"`
-	LastStateEvent         string   `json:"last_state_event,omitempty"`
-	ActivityState          string   `json:"activity_state,omitempty"`
-	ActivityReason         string   `json:"activity_reason,omitempty"`
-	ProcessLogPath         string   `json:"process_log_path,omitempty"`
-	RuntimePayloadPath     string   `json:"runtime_payload_path,omitempty"`
-	PromptPath             string   `json:"prompt_path,omitempty"`
-	UpdatedAt              string   `json:"updated_at,omitempty"`
 }
 
 func NewRegistry(projectRoot string) Registry {
@@ -48,7 +52,7 @@ func (r Registry) Ensure() error {
 }
 
 func (r Registry) dir() string {
-	return filepath.Join(r.projectRoot, ".bsw", "agents")
+	return filepath.Join(r.projectRoot, ".bsw", "workers")
 }
 
 func (r Registry) path(beadID string) string {
@@ -56,19 +60,27 @@ func (r Registry) path(beadID string) string {
 	return filepath.Join(r.dir(), safe+".json")
 }
 
-func (r Registry) Save(rt WorkerRuntime) error {
-	if strings.TrimSpace(rt.BeadID) == "" {
-		return fmt.Errorf("registry save: bead_id required")
+// IsActive returns true if a worker for the given bead is registered and its process is alive.
+func (r Registry) IsActive(beadID string) bool {
+	e, err := r.Load(beadID)
+	if err != nil {
+		return false
+	}
+	return IsOurProcess(e.PID, e.StartTimeNs)
+}
+
+func (r Registry) Save(e WorkerEntry) error {
+	if err := ValidateBeadID(e.BeadID); err != nil {
+		return fmt.Errorf("registry save: %w", err)
 	}
 	if err := r.Ensure(); err != nil {
 		return err
 	}
-	rt.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	data, err := json.MarshalIndent(rt, "", "  ")
+	data, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
 		return err
 	}
-	p := r.path(rt.BeadID)
+	p := r.path(e.BeadID)
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
@@ -84,19 +96,19 @@ func (r Registry) Delete(beadID string) error {
 	return err
 }
 
-func (r Registry) Load(beadID string) (WorkerRuntime, error) {
+func (r Registry) Load(beadID string) (WorkerEntry, error) {
 	b, err := os.ReadFile(r.path(beadID))
 	if err != nil {
-		return WorkerRuntime{}, err
+		return WorkerEntry{}, err
 	}
-	var rt WorkerRuntime
-	if err := json.Unmarshal(b, &rt); err != nil {
-		return WorkerRuntime{}, err
+	var e WorkerEntry
+	if err := json.Unmarshal(b, &e); err != nil {
+		return WorkerEntry{}, err
 	}
-	return rt, nil
+	return e, nil
 }
 
-func (r Registry) LoadAll() ([]WorkerRuntime, error) {
+func (r Registry) LoadAll() ([]WorkerEntry, error) {
 	if err := r.Ensure(); err != nil {
 		return nil, err
 	}
@@ -104,24 +116,23 @@ func (r Registry) LoadAll() ([]WorkerRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]WorkerRuntime, 0, len(entries))
+	out := make([]WorkerEntry, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		path := filepath.Join(r.dir(), e.Name())
-		b, err := os.ReadFile(path)
+		b, err := os.ReadFile(filepath.Join(r.dir(), e.Name()))
 		if err != nil {
 			continue
 		}
-		var rt WorkerRuntime
-		if err := json.Unmarshal(b, &rt); err != nil {
+		var we WorkerEntry
+		if err := json.Unmarshal(b, &we); err != nil {
 			continue
 		}
-		if strings.TrimSpace(rt.BeadID) == "" {
+		if strings.TrimSpace(we.BeadID) == "" {
 			continue
 		}
-		out = append(out, rt)
+		out = append(out, we)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].BeadID < out[j].BeadID })
 	return out, nil

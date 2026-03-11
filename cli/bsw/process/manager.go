@@ -1,168 +1,189 @@
 package process
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
-
-	"boring-swarm/cli/bsw/agent"
 )
+
+type SpawnSpec struct {
+	BeadID       string
+	Persona      string
+	Provider     string
+	Model        string
+	Effort       string
+	SystemPrompt string // full prompt text
+	UserPrompt   string // bead context
+	ProjectRoot  string
+	Mode         string // "tmux" | "bg"
+	TmuxSession  string // join this session as a window (empty = create new session)
+}
 
 type Manager struct {
 	projectRoot string
-}
-
-type SpawnSpec struct {
-	RunID              string
-	Attempt            int
-	BeadID             string
-	BeadTitle          string
-	BeadDescription    string
-	SourceLabel        string
-	AssignmentToken    string
-	AllowedTransitions []string
-	AgentName          string
-	Provider           string
-	Model              string
-	Effort             string
-	PromptPath         string
-}
-
-type RuntimeContextPayload struct {
-	BeadID             string   `json:"bead_id"`
-	BeadTitle          string   `json:"bead_title"`
-	BeadDescription    string   `json:"bead_description"`
-	SourceLabel        string   `json:"source_label"`
-	AssignmentToken    string   `json:"assignment_token"`
-	AllowedTransitions []string `json:"allowed_transitions"`
-	RunID              string   `json:"run_id"`
-	Attempt            int      `json:"attempt"`
 }
 
 func NewManager(projectRoot string) Manager {
 	return Manager{projectRoot: projectRoot}
 }
 
-func (m Manager) Spawn(ctx context.Context, s SpawnSpec) (WorkerRuntime, error) {
-	provider := agent.NormalizeProvider(s.Provider)
-	systemPrompt, err := os.ReadFile(s.PromptPath)
+// Spawn starts a worker in either background or tmux mode.
+func (m Manager) Spawn(s SpawnSpec) (WorkerEntry, error) {
+	if err := ValidateBeadID(s.BeadID); err != nil {
+		return WorkerEntry{}, err
+	}
+	if s.Mode != "bg" && s.Mode != "tmux" {
+		return WorkerEntry{}, fmt.Errorf("invalid mode %q (must be bg or tmux)", s.Mode)
+	}
+
+	provider := normalizeProvider(s.Provider)
+
+	logDir := filepath.Join(m.projectRoot, ".bsw", "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return WorkerEntry{}, err
+	}
+	logPath := filepath.Join(logDir, s.BeadID+".log")
+
+	switch s.Mode {
+	case "tmux":
+		return m.spawnTmux(s, provider, logPath)
+	default:
+		return m.spawnBg(s, provider, logPath)
+	}
+}
+
+func (m Manager) spawnBg(s SpawnSpec, provider, logPath string) (WorkerEntry, error) {
+	cmd, stdin, err := buildProviderCommand(provider, s.Model, s.Effort, s.SystemPrompt, s.UserPrompt, s.ProjectRoot)
 	if err != nil {
-		return WorkerRuntime{}, fmt.Errorf("read workers.prompt %s: %w", s.PromptPath, err)
+		return WorkerEntry{}, err
 	}
+	cmd.Dir = s.ProjectRoot
+	cmd.Env = filteredEnv("CLAUDECODE")
 
-	payload := RuntimeContextPayload{
-		BeadID:             s.BeadID,
-		BeadTitle:          s.BeadTitle,
-		BeadDescription:    s.BeadDescription,
-		SourceLabel:        s.SourceLabel,
-		AssignmentToken:    s.AssignmentToken,
-		AllowedTransitions: append([]string(nil), s.AllowedTransitions...),
-		RunID:              s.RunID,
-		Attempt:            s.Attempt,
-	}
-
-	payloadPath := filepath.Join(m.projectRoot, ".bsw", "runtime", "runs", s.RunID, "payloads", fmt.Sprintf("%s-%d.json", s.BeadID, s.Attempt))
-	if err := os.MkdirAll(filepath.Dir(payloadPath), 0o755); err != nil {
-		return WorkerRuntime{}, err
-	}
-	pb, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return WorkerRuntime{}, err
-	}
-	if err := os.WriteFile(payloadPath, pb, 0o644); err != nil {
-		return WorkerRuntime{}, err
-	}
-
-	logPath := filepath.Join(m.projectRoot, ".bsw", "runtime", "runs", s.RunID, "workers", fmt.Sprintf("%s-%d.log", s.BeadID, s.Attempt))
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return WorkerRuntime{}, err
-	}
 	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return WorkerRuntime{}, err
+		return WorkerEntry{}, err
 	}
-	logWriter := newCappedLineWriter(logf, workerLogMaxLineBytes())
-
-	userPrompt := buildUserPrompt(payload)
-	cmd, stdin, err := buildProviderCommand(provider, s.Model, s.Effort, string(systemPrompt), userPrompt, m.projectRoot)
-	if err != nil {
-		_ = logf.Close()
-		return WorkerRuntime{}, err
-	}
-	cmd.Dir = m.projectRoot
-	cmd.Env = filteredEnv("CLAUDECODE")
-	cmd.Stdout = logWriter
-	cmd.Stderr = logWriter
+	cmd.Stdout = logf
+	cmd.Stderr = logf
 
 	if stdin != "" {
 		pipe, err := cmd.StdinPipe()
 		if err != nil {
-			_ = logf.Close()
-			return WorkerRuntime{}, err
+			logf.Close()
+			return WorkerEntry{}, err
 		}
 		go func() {
 			defer pipe.Close()
-			_, _ = pipe.Write([]byte(stdin))
+			pipe.Write([]byte(stdin))
 		}()
 	}
 
+	// Put worker in its own process group so we can kill the entire tree
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	if err := cmd.Start(); err != nil {
-		_ = logf.Close()
-		return WorkerRuntime{}, fmt.Errorf("spawn worker: %w", err)
+		logf.Close()
+		return WorkerEntry{}, fmt.Errorf("spawn worker: %w", err)
 	}
 	go func() {
-		_ = cmd.Wait()
-		_ = logWriter.flushLine(false)
-		_ = logf.Close()
+		cmd.Wait()
+		logf.Close()
 	}()
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	rt := WorkerRuntime{
-		BeadID:             s.BeadID,
-		Role:               "queue-worker",
-		PID:                cmd.Process.Pid,
-		Provider:           provider,
-		AgentName:          s.AgentName,
-		AssignmentToken:    s.AssignmentToken,
-		SourceLabel:        s.SourceLabel,
-		AllowedTransitions: append([]string(nil), s.AllowedTransitions...),
-		RunID:              s.RunID,
-		Attempt:            s.Attempt,
-		StartedAt:          now,
-		LastProgressTS:     now,
-		ActivityState:      string(agent.StateActive),
-		ProcessLogPath:     logPath,
-		RuntimePayloadPath: payloadPath,
-		PromptPath:         s.PromptPath,
+	pid := cmd.Process.Pid
+	return WorkerEntry{
+		BeadID:      s.BeadID,
+		Persona:     s.Persona,
+		Provider:    provider,
+		Mode:        "bg",
+		PID:         pid,
+		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+		StartTimeNs: procStartTime(pid),
+		Log:         logPath,
+	}, nil
+}
+
+
+func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, error) {
+	windowName := "bsw-" + s.BeadID
+
+	// Build the provider command — TUI mode for interactive tmux
+	shellCmd, err := buildProviderTUICommand(provider, s.Model, s.Effort, s.SystemPrompt, s.UserPrompt, s.ProjectRoot)
+	if err != nil {
+		return WorkerEntry{}, err
 	}
-	return rt, nil
+
+	// TUI runs interactively, tee output to log via script(1) to preserve terminal
+	fullCmd := fmt.Sprintf("cd %s && script -q -c %s %s", shellQuote(s.ProjectRoot), shellQuote(shellCmd), shellQuote(logPath))
+
+	// Either split a pane in an existing session, or create a new session
+	var paneTarget string
+	if s.TmuxSession != "" {
+		// New pane in current window of the target session
+		tmuxCmd := exec.Command("tmux", "split-window", "-t", s.TmuxSession, "-h", fullCmd)
+		if err := tmuxCmd.Run(); err != nil {
+			return WorkerEntry{}, fmt.Errorf("tmux split-window in %s: %w", s.TmuxSession, err)
+		}
+		// The new pane is the last one — get its ID
+		out, err := exec.Command("tmux", "display-message", "-t", s.TmuxSession, "-p", "#{pane_id}").Output()
+		if err == nil {
+			paneTarget = strings.TrimSpace(string(out))
+		} else {
+			paneTarget = s.TmuxSession
+		}
+	} else {
+		// New detached session
+		tmuxCmd := exec.Command("tmux", "new-session", "-d", "-s", windowName, fullCmd)
+		if err := tmuxCmd.Run(); err != nil {
+			return WorkerEntry{}, fmt.Errorf("tmux new-session: %w", err)
+		}
+		paneTarget = windowName
+	}
+
+	// Get the PID of the process inside the pane
+	out, err := exec.Command("tmux", "list-panes", "-t", paneTarget, "-F", "#{pane_pid}").Output()
+	if err != nil {
+		return WorkerEntry{}, fmt.Errorf("tmux get pane pid: %w", err)
+	}
+	pid := 0
+	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &pid)
+
+	return WorkerEntry{
+		BeadID:      s.BeadID,
+		Persona:     s.Persona,
+		Provider:    provider,
+		Mode:        "tmux",
+		PID:         pid,
+		Pane:        paneTarget,
+		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+		StartTimeNs: procStartTime(pid),
+		Log:         logPath,
+	}, nil
 }
 
 func buildProviderCommand(provider, model, effort, systemPrompt, userPrompt, projectRoot string) (*exec.Cmd, string, error) {
-	provider = agent.NormalizeProvider(provider)
 	switch provider {
 	case "codex":
 		bin := providerBinary("codex")
-		sandboxMode := strings.TrimSpace(os.Getenv("BSW_CODEX_SANDBOX"))
-		if sandboxMode == "" {
-			sandboxMode = "danger-full-access"
+		args := []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox"}
+		if model != "" {
+			args = append(args, "--model", model)
 		}
-		args := []string{"exec", "--json", "--model", model, "--cd", projectRoot, "--sandbox", sandboxMode, "-"}
+		args = append(args, "--cd", projectRoot, "-")
 		cmd := exec.Command(bin, args...)
 		stdin := systemPrompt + "\n\n" + userPrompt + "\n"
 		return cmd, stdin, nil
 	case "claude":
 		bin := providerBinary("claude")
-		args := []string{"-p", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions", "--model", model}
+		args := []string{"-p", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
 		if strings.TrimSpace(effort) != "" {
 			args = append(args, "--effort", strings.TrimSpace(effort))
 		}
@@ -174,8 +195,68 @@ func buildProviderCommand(provider, model, effort, systemPrompt, userPrompt, pro
 	}
 }
 
+// buildProviderShellCommand returns a non-interactive shell command string (for bg mode).
+func buildProviderShellCommand(provider, model, effort, systemPrompt, userPrompt, projectRoot string) (string, error) {
+	switch provider {
+	case "codex":
+		bin := providerBinary("codex")
+		prompt := systemPrompt + "\n\n" + userPrompt
+		parts := []string{"echo", shellQuote(prompt), "|", shellQuote(bin), "exec", "--json", "--dangerously-bypass-approvals-and-sandbox"}
+		if model != "" {
+			parts = append(parts, "--model", shellQuote(model))
+		}
+		parts = append(parts, "--cd", shellQuote(projectRoot), "-")
+		return strings.Join(parts, " "), nil
+	case "claude":
+		bin := providerBinary("claude")
+		parts := []string{shellQuote(bin), "-p", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"}
+		if model != "" {
+			parts = append(parts, "--model", shellQuote(model))
+		}
+		if strings.TrimSpace(effort) != "" {
+			parts = append(parts, "--effort", shellQuote(strings.TrimSpace(effort)))
+		}
+		parts = append(parts, "--system-prompt", shellQuote(systemPrompt), shellQuote(userPrompt))
+		return strings.Join(parts, " "), nil
+	default:
+		return "", fmt.Errorf("unsupported provider %q", provider)
+	}
+}
+
+// buildProviderTUICommand returns a TUI command string for tmux mode (interactive terminal).
+func buildProviderTUICommand(provider, model, effort, systemPrompt, userPrompt, projectRoot string) (string, error) {
+	switch provider {
+	case "codex":
+		bin := providerBinary("codex")
+		parts := []string{shellQuote(bin), "--dangerously-bypass-approvals-and-sandbox"}
+		if model != "" {
+			parts = append(parts, "--model", shellQuote(model))
+		}
+		parts = append(parts, "--cd", shellQuote(projectRoot))
+		parts = append(parts, shellQuote(systemPrompt+"\n\n"+userPrompt))
+		return strings.Join(parts, " "), nil
+	case "claude":
+		bin := providerBinary("claude")
+		parts := []string{shellQuote(bin), "--dangerously-skip-permissions"}
+		if model != "" {
+			parts = append(parts, "--model", shellQuote(model))
+		}
+		if strings.TrimSpace(effort) != "" {
+			parts = append(parts, "--effort", shellQuote(strings.TrimSpace(effort)))
+		}
+		parts = append(parts, "--system-prompt", shellQuote(systemPrompt), shellQuote(userPrompt))
+		return strings.Join(parts, " "), nil
+	default:
+		return "", fmt.Errorf("unsupported provider %q", provider)
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 func providerBinary(provider string) string {
-	provider = agent.NormalizeProvider(provider)
+	provider = normalizeProvider(provider)
 	switch provider {
 	case "codex":
 		if v := strings.TrimSpace(os.Getenv("BSW_CODEX_BIN")); v != "" {
@@ -192,199 +273,18 @@ func providerBinary(provider string) string {
 	}
 }
 
-func ResolveProviderBinary(provider string) string {
-	return providerBinary(provider)
-}
-
-func buildUserPrompt(payload RuntimeContextPayload) string {
-	b, _ := json.MarshalIndent(payload, "", "  ")
-	body := strings.TrimSpace(`Runtime context (authoritative):
-` + string(b) + `
-
-Task contract:
-1) Get bead details with: br show <bead-id>
-2) Execute work according to system prompt.
-3) Post exactly one terminal STATE line as a bead comment via br:
-   br comments add <bead-id> "STATE <event> assignment=<token>"
-   Use the exact assignment token from runtime context.
-4) Valid events are only those listed in allowed_transitions.
-5) Infra reliability checks:
-   - Prefer bead-scoped checks; avoid broad/full-suite runs unless explicitly required by bead acceptance criteria.
-   - If a command fails with infra symptoms (port in use, connection refused, no tests found from bad grep), retry once with corrected invocation before terminal STATE.
-   - Keep commands reproducible from project root.
-6) Bead state access must be via br CLI only (SQLite-native mode).
-   - Do NOT read or edit .beads/issues.jsonl directly.
-   - Do NOT write directly to .beads/beads.db.
-7) Do not mutate labels or assignee.
-8) Exit immediately after posting the terminal STATE comment.`)
-	return body
-}
-
-func workerLogMaxLineBytes() int {
-	const def = 256 * 1024
-	v := strings.TrimSpace(os.Getenv("BSW_WORKER_LOG_MAX_LINE_BYTES"))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 16*1024 {
-		return def
-	}
-	return n
-}
-
-type cappedLineWriter struct {
-	dst     io.Writer
-	max     int
-	mu      sync.Mutex
-	lineBuf []byte
-	dropped int
-}
-
-func newCappedLineWriter(dst io.Writer, maxLineBytes int) *cappedLineWriter {
-	if maxLineBytes <= 0 {
-		maxLineBytes = 256 * 1024
-	}
-	return &cappedLineWriter{
-		dst:     dst,
-		max:     maxLineBytes,
-		lineBuf: make([]byte, 0, 4096),
+func normalizeProvider(p string) string {
+	s := strings.ToLower(strings.TrimSpace(p))
+	switch s {
+	case "codex", "openai":
+		return "codex"
+	case "claude", "anthropic":
+		return "claude"
+	default:
+		return s
 	}
 }
 
-func (w *cappedLineWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, b := range p {
-		if b == '\n' {
-			if err := w.flushLineLocked(true); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		if len(w.lineBuf) < w.max {
-			w.lineBuf = append(w.lineBuf, b)
-		} else {
-			w.dropped++
-		}
-	}
-	return len(p), nil
-}
-
-func (w *cappedLineWriter) flushLine(withNewline bool) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.flushLineLocked(withNewline)
-}
-
-func (w *cappedLineWriter) flushLineLocked(withNewline bool) error {
-	if len(w.lineBuf) > 0 {
-		if _, err := w.dst.Write(w.lineBuf); err != nil {
-			return err
-		}
-	}
-	if w.dropped > 0 {
-		msg := fmt.Sprintf(" ... [bsw truncated %d bytes from oversized log line]", w.dropped)
-		if _, err := w.dst.Write([]byte(msg)); err != nil {
-			return err
-		}
-	}
-	if withNewline {
-		if _, err := w.dst.Write([]byte{'\n'}); err != nil {
-			return err
-		}
-	}
-	w.lineBuf = w.lineBuf[:0]
-	w.dropped = 0
-	return nil
-}
-
-func (m Manager) Refresh(rt WorkerRuntime, now time.Time) (WorkerRuntime, error) {
-	alive := IsAlive(rt.PID)
-	d, err := agent.DetectFromLog(rt.Provider, rt.ProcessLogPath, now)
-	if err != nil {
-		return rt, err
-	}
-	if d.SessionRef != "" {
-		rt.SessionRef = d.SessionRef
-	}
-	if rt.SessionRef != "" {
-		rt.ResumeCommand = agent.ResumeCommand(rt.Provider, rt.SessionRef)
-	}
-	if !d.LastProgress.IsZero() {
-		rt.LastProgressTS = d.LastProgress.UTC().Format(time.RFC3339)
-	}
-	rt.ActivityReason = strings.TrimSpace(d.Reason)
-	if !alive {
-		rt.ActivityState = string(agent.StateExited)
-		if rt.ActivityReason == "" {
-			rt.ActivityReason = "process_exited"
-		}
-	} else {
-		if d.State == agent.StateUnknown {
-			rt.ActivityState = string(agent.StateActive)
-			if rt.ActivityReason == "" {
-				rt.ActivityReason = "log_state_unknown"
-			}
-		} else {
-			rt.ActivityState = string(d.State)
-		}
-	}
-	return rt, nil
-}
-
-func IsAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil
-}
-
-func Terminate(pid int) error {
-	if pid <= 0 {
-		return nil
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	if err := p.Signal(syscall.SIGTERM); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "process already finished") {
-			return nil
-		}
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if !IsAlive(pid) {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if err := p.Signal(syscall.SIGKILL); err != nil {
-		return err
-	}
-	return nil
-}
-
-func ParseTS(v string) time.Time {
-	if strings.TrimSpace(v) == "" {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
-// filteredEnv returns os.Environ() with the named keys removed.
-// This prevents parent-session env vars (e.g. CLAUDECODE) from leaking
-// into spawned worker processes.
 func filteredEnv(keys ...string) []string {
 	drop := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
@@ -403,12 +303,102 @@ func filteredEnv(keys ...string) []string {
 	return out
 }
 
-func AgentName(runID, beadID string, attempt int) string {
-	suffix := strings.ReplaceAll(strings.TrimSpace(beadID), "bd-", "")
-	suffix = strings.ReplaceAll(suffix, ":", "")
-	r := runID
-	if len(r) > 8 {
-		r = r[len(r)-8:]
+func IsAlive(pid int) bool {
+	if pid <= 0 {
+		return false
 	}
-	return "worker-" + r + "-" + suffix + "-" + strconv.Itoa(attempt)
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+func Terminate(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+
+	// Try to kill the entire process group first (negative PID).
+	// This catches subprocesses spawned by the worker.
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+
+	// Also signal the process directly in case Setpgid wasn't used.
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "process already finished") {
+			return nil
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !IsAlive(pid) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Escalate to SIGKILL on both group and process
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	return p.Signal(syscall.SIGKILL)
+}
+
+// TerminateTmux kills a tmux pane (not the whole session).
+func TerminateTmux(pane string) error {
+	if pane == "" {
+		return nil
+	}
+	// Try kill-pane first — this only removes the worker's pane, not the session.
+	if err := exec.Command("tmux", "kill-pane", "-t", pane).Run(); err != nil {
+		// Fall back to kill-window if pane target looks like a session/window name
+		return exec.Command("tmux", "kill-window", "-t", pane).Run()
+	}
+	return nil
+}
+
+// procStartTime reads the process start time from /proc/<pid>/stat (field 22).
+// Returns 0 if unreadable. Used to detect PID reuse.
+func procStartTime(pid int) int64 {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0
+	}
+	// Fields after the comm (which may contain spaces/parens) start after the last ')'.
+	s := string(data)
+	idx := strings.LastIndex(s, ")")
+	if idx < 0 || idx+2 >= len(s) {
+		return 0
+	}
+	fields := strings.Fields(s[idx+2:])
+	// Field 22 in /proc/pid/stat is starttime; after comm extraction it's index 19.
+	if len(fields) < 20 {
+		return 0
+	}
+	v, err := fmt.Sscanf(fields[19], "%d", new(int64))
+	if err != nil || v != 1 {
+		return 0
+	}
+	var ns int64
+	fmt.Sscanf(fields[19], "%d", &ns)
+	return ns
+}
+
+// IsOurProcess checks if the PID is alive AND has the same start time as when we spawned it.
+// This prevents operating on a recycled PID.
+func IsOurProcess(pid int, expectedStartTime int64) bool {
+	if !IsAlive(pid) {
+		return false
+	}
+	if expectedStartTime == 0 {
+		return true // no start time recorded, fall back to PID-only check
+	}
+	actual := procStartTime(pid)
+	if actual == 0 {
+		return true // can't read /proc, fall back to PID-only check
+	}
+	return actual == expectedStartTime
 }

@@ -2,26 +2,19 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"boring-swarm/cli/bsw/beads"
-	"boring-swarm/cli/bsw/engine"
 	"boring-swarm/cli/bsw/process"
 )
 
 func runStop(args []string) error {
 	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
-	project := fs.String("project", ".", "project root")
-	actor := fs.String("actor", defaultActor, "actor")
+	project := fs.String("project", ".", "project root directory")
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
 		return err
 	}
 	root, err := projectRootFromFlag(*project)
@@ -29,46 +22,55 @@ func runStop(args []string) error {
 		return err
 	}
 
-	signalPath := filepath.Join(root, ".bsw", "stop.signal")
-	_ = os.MkdirAll(filepath.Dir(signalPath), 0o755)
-	_ = os.WriteFile(signalPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644)
-
 	reg := process.NewRegistry(root)
-	runtimes, _ := reg.LoadAll()
-	client := beads.Client{Workdir: root, Actor: *actor}
-	for _, rt := range runtimes {
-		_ = process.Terminate(rt.PID)
-		_ = client.ClearAssigneeIfMatch(context.Background(), rt.BeadID, rt.AgentName, *actor)
-		_ = reg.Delete(rt.BeadID)
+	entries, err := reg.LoadAll()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Println("No active workers")
+		return nil
 	}
 
-	serviceKilled := 0
-	services, _ := engine.ListServiceProcesses(root)
-	for _, sp := range services {
-		if process.IsAlive(sp.PID) {
-			_ = process.Terminate(sp.PID)
-			serviceKilled++
+	client := beads.Client{Workdir: root}
+	killed := 0
+	for _, e := range entries {
+		// Verify PID belongs to us
+		if !process.IsOurProcess(e.PID, e.StartTimeNs) {
+			fmt.Fprintf(os.Stderr, "  warning: %s PID %d no longer our process, cleaning registry only\n", e.BeadID, e.PID)
+		} else {
+			terminated := true
+			if e.Mode == "tmux" && e.Pane != "" {
+				// tmux workers: kill pane only, don't kill process group
+				if err := process.TerminateTmux(e.Pane); err != nil {
+					fmt.Fprintf(os.Stderr, "  warning: tmux kill-pane %s: %v\n", e.BeadID, err)
+					terminated = false
+				}
+			} else {
+				// bg workers: kill process + process group
+				if err := process.Terminate(e.PID); err != nil {
+					fmt.Fprintf(os.Stderr, "  warning: terminate %s pid %d: %v\n", e.BeadID, e.PID, err)
+					terminated = false
+				}
+			}
+			if !terminated {
+				fmt.Fprintf(os.Stderr, "  warning: skipping cleanup for %s — termination failed\n", e.BeadID)
+				continue
+			}
 		}
-	}
-	// Best-effort cleanup of service registry artifacts (live or stale).
-	for _, sp := range services {
-		_ = os.Remove(sp.Path)
-	}
 
-	rs, _ := engine.LoadRunState(root)
-	if rs.RunID == "" {
-		rs.RunID = engine.NewRunID()
+		// Unclaim and clean up
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := client.ClearAssignee(ctx, e.BeadID); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: unclaim %s: %v\n", e.BeadID, err)
+		}
+		cancel()
+		if err := reg.Delete(e.BeadID); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: registry delete %s: %v\n", e.BeadID, err)
+		}
+		fmt.Printf("  Killed %s (pid=%d)\n", e.BeadID, e.PID)
+		killed++
 	}
-	if rs.PID > 0 && process.IsAlive(rs.PID) {
-		_ = process.Terminate(rs.PID)
-		serviceKilled++
-	}
-	rs.Status = "stopped"
-	if rs.StartedAt == "" {
-		rs.StartedAt = time.Now().UTC().Format(time.RFC3339)
-	}
-	rs.PID = 0
-	_ = engine.SaveRunState(root, rs)
-	fmt.Printf("stop requested; terminated %d worker(s), %d service process(es)\n", len(runtimes), serviceKilled)
+	fmt.Printf("Stopped %d workers\n", killed)
 	return nil
 }

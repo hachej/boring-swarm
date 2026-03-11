@@ -1,28 +1,49 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"path/filepath"
+	"os"
+	"time"
 
-	"boring-swarm/cli/bsw/beads"
-	"boring-swarm/cli/bsw/dsl"
-	"boring-swarm/cli/bsw/status"
+	"boring-swarm/cli/bsw/monitor"
+	"boring-swarm/cli/bsw/process"
 )
+
+// projectStatus collects worker statuses for a single project root.
+// Pure function — no output, no side effects.
+func projectStatus(root string) ([]monitor.Status, error) {
+	reg := process.NewRegistry(root)
+	entries, err := reg.LoadAll()
+	if err != nil {
+		return nil, err
+	}
+
+	stallTimeout := 10 * time.Minute
+	statuses := make([]monitor.Status, 0, len(entries))
+	for _, e := range entries {
+		me := monitor.WorkerEntry{
+			BeadID:      e.BeadID,
+			Persona:     e.Persona,
+			Provider:    e.Provider,
+			Mode:        e.Mode,
+			PID:         e.PID,
+			Pane:        e.Pane,
+			StartedAt:   e.StartedAt,
+			StartTimeNs: e.StartTimeNs,
+			Log:         e.Log,
+		}
+		statuses = append(statuses, monitor.CheckWorker(me, stallTimeout))
+	}
+	return statuses, nil
+}
 
 func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
-	project := fs.String("project", ".", "project root")
-	jsonOut := fs.Bool("json", false, "emit json snapshot")
-	explain := fs.Bool("explain", false, "include deterministic reason fields")
-	flowPath := fs.String("flow", "", "flow path override")
+	asJSON := fs.Bool("json", false, "output as JSON")
+	project := fs.String("project", ".", "project root directory")
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
 		return err
 	}
 	root, err := projectRootFromFlag(*project)
@@ -30,42 +51,33 @@ func runStatus(args []string) error {
 		return err
 	}
 
-	resolvedFlow := *flowPath
-	if resolvedFlow == "" {
-		rs, err := loadRunStateSafe(root)
-		if err == nil {
-			resolvedFlow = rs.Flow
-		}
-	}
-	var spec *dsl.FlowSpec
-	if resolvedFlow != "" {
-		if !filepath.IsAbs(resolvedFlow) {
-			resolvedFlow = filepath.Join(root, resolvedFlow)
-		}
-		spec, _ = dsl.ParseFile(resolvedFlow)
-	}
-
-	snap, err := status.BuildSnapshot(context.Background(), root, beads.Client{Workdir: root}, spec, *explain)
+	statuses, err := projectStatus(root)
 	if err != nil {
 		return err
 	}
 
-	if *jsonOut {
-		enc := json.NewEncoder(stdoutWriter{})
+	now := time.Now()
+	fmt.Fprintf(os.Stderr, "--- check %s | next %s ---\n", now.Format("15:04:05"), now.Add(30*time.Second).Format("15:04:05"))
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(snap)
+		return enc.Encode(statuses)
 	}
 
-	fmt.Printf("run=%s mode=%s status=%s\n", snap.Run.RunID, snap.Run.Mode, snap.Run.Status)
-	for q, st := range snap.Queues {
-		fmt.Printf("queue %s: total=%d unassigned=%d assigned=%d\n", q, st.Total, st.Unassigned, st.Assigned)
+	if len(statuses) == 0 {
+		fmt.Println("No active workers")
+		return nil
 	}
-	fmt.Printf("beads=%d agents=%d attention=%d\n", len(snap.Beads), len(snap.Agents), len(snap.Attention))
+
+	fmt.Printf("Workers: %d\n\n", len(statuses))
+	for _, s := range statuses {
+		staleTag := ""
+		if s.Stale {
+			staleTag = " [STALE]"
+		}
+		fmt.Printf("  %-12s %-10s %-6s %-10s pid=%-6d up=%-8s activity=%-10s%s\n",
+			s.BeadID, s.Persona, s.Mode, s.State, s.PID, s.Uptime, s.LastActivity, staleTag)
+	}
 	return nil
-}
-
-type stdoutWriter struct{}
-
-func (stdoutWriter) Write(p []byte) (int, error) {
-	return fmt.Print(string(p))
 }

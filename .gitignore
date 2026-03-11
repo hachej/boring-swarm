@@ -6,3 +6,12 @@ cli/bsw/bsw
 *.dll
 *.so
 *.dylib
+
+# Eval run artifacts (transcripts, logs)
+eval/runs/*/
+
+# Runtime data
+.bsw/
+
+# Experimental apps
+apps/

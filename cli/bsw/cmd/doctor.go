@@ -1,106 +1,169 @@
 package cmd
 
 import (
-	"errors"
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strings"
+	"time"
 
-	"boring-swarm/cli/bsw/agent"
-	"boring-swarm/cli/bsw/dsl"
+	"boring-swarm/cli/bsw/beads"
+	"boring-swarm/cli/bsw/monitor"
+	"boring-swarm/cli/bsw/persona"
 	"boring-swarm/cli/bsw/process"
 )
 
 func runDoctor(args []string) error {
-	flagArgs, flowArg, extras := splitArgs(args, map[string]bool{
-		"project": true,
-	})
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	project := fs.String("project", ".", "project root")
-	if err := fs.Parse(flagArgs); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
+	project := fs.String("project", ".", "project root directory")
+	fix := fs.Bool("fix", false, "auto-fix issues (runs gc, cleans stale entries)")
+	if err := fs.Parse(args); err != nil {
 		return err
-	}
-	if len(extras) > 0 {
-		return fmt.Errorf("unexpected extra arguments: %v", extras)
 	}
 	root, err := projectRootFromFlag(*project)
 	if err != nil {
 		return err
 	}
 
-	flowPath := flowArg
-	if flowPath == "" && fs.NArg() > 0 {
-		flowPath = fs.Arg(0)
-	}
-	if flowPath == "" {
-		rs, err := loadRunStateSafe(root)
-		if err == nil {
-			flowPath = rs.Flow
-		}
-	}
-	if flowPath == "" {
-		flowPath = filepath.Join(root, "flows", "implement_worker_queue.yml")
-	}
-	if !filepath.IsAbs(flowPath) {
-		flowPath = filepath.Join(root, flowPath)
-	}
+	issues := 0
+	ok := func(msg string) { fmt.Printf("  ok  %s\n", msg) }
+	warn := func(msg string) { issues++; fmt.Printf("  !!  %s\n", msg) }
 
-	problems := 0
-	if _, err := exec.LookPath("br"); err != nil {
-		fmt.Println("[fail] br not found in PATH")
-		problems++
-	} else {
-		fmt.Println("[ok] br found")
-	}
+	fmt.Println("bsw doctor")
+	fmt.Println()
 
-	spec, err := dsl.ParseFile(flowPath)
-	if err != nil {
-		fmt.Printf("[fail] flow parse: %v\n", err)
-		problems++
-	} else {
-		fmt.Printf("[ok] flow parse: %s\n", flowPath)
-		promptPath := dsl.ResolvePromptPath(root, spec.Workers.Prompt)
-		if _, err := os.Stat(promptPath); err != nil {
-			fmt.Printf("[fail] workers.prompt missing: %s\n", promptPath)
-			problems++
+	// 1. Check tools
+	fmt.Println("[tools]")
+	for _, bin := range []string{"br", "tmux"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			warn(fmt.Sprintf("%s not found in PATH", bin))
 		} else {
-			fmt.Printf("[ok] workers.prompt exists: %s\n", promptPath)
-		}
-		provider := agent.NormalizeProvider(spec.Workers.Provider)
-		providerBin := process.ResolveProviderBinary(provider)
-		if _, err := exec.LookPath(providerBin); err != nil {
-			fmt.Printf("[fail] provider binary missing: %s (workers.provider=%s)\n", providerBin, spec.Workers.Provider)
-			problems++
-		} else {
-			fmt.Printf("[ok] provider binary found: %s (workers.provider=%s)\n", providerBin, spec.Workers.Provider)
+			ok(fmt.Sprintf("%s found", bin))
 		}
 	}
-
-	if err := checkBRWorkspace(root); err != nil {
-		fmt.Printf("[fail] beads workspace: %v\n", err)
-		problems++
-	} else {
-		fmt.Println("[ok] beads workspace available")
+	// Check at least one provider
+	foundProvider := false
+	for _, bin := range []string{"claude", "codex"} {
+		if _, err := exec.LookPath(bin); err == nil {
+			ok(fmt.Sprintf("%s found", bin))
+			foundProvider = true
+		}
+	}
+	if !foundProvider {
+		warn("no provider CLI found (need claude or codex)")
 	}
 
-	if problems > 0 {
-		return fmt.Errorf("doctor found %d problem(s)", problems)
-	}
-	fmt.Println("doctor: all checks passed")
-	return nil
-}
-
-func checkBRWorkspace(root string) error {
-	cmd := exec.Command("br", "where")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
+	// 2. Check personas
+	fmt.Println("\n[personas]")
+	personas, err := persona.LoadDir(root + "/personas")
 	if err != nil {
-		return fmt.Errorf("br where failed: %s", string(out))
+		warn(fmt.Sprintf("cannot load personas: %v — run: bsw init", err))
+	} else if len(personas) == 0 {
+		warn("no personas found — run: bsw init")
+	} else {
+		for name, p := range personas {
+			promptPath := root + "/" + p.Prompt
+			if _, err := os.Stat(promptPath); err != nil {
+				warn(fmt.Sprintf("persona %q: prompt file missing: %s", name, p.Prompt))
+			} else {
+				ok(fmt.Sprintf("persona %q (provider=%s, model=%s)", name, p.Provider, p.Model))
+			}
+		}
+	}
+
+	// 3. Check worker registry
+	fmt.Println("\n[workers]")
+	reg := process.NewRegistry(root)
+	entries, err := reg.LoadAll()
+	if err != nil {
+		warn(fmt.Sprintf("cannot load registry: %v", err))
+	} else if len(entries) == 0 {
+		ok("no workers registered")
+	} else {
+		dead := 0
+		orphans := 0
+		stale := 0
+		running := 0
+		for _, e := range entries {
+			me := monitor.WorkerEntry{
+				BeadID: e.BeadID, Persona: e.Persona, Provider: e.Provider,
+				Mode: e.Mode, PID: e.PID, Pane: e.Pane,
+				StartedAt: e.StartedAt, StartTimeNs: e.StartTimeNs, Log: e.Log,
+			}
+			s := monitor.CheckWorker(me, 10*60*1e9) // 10m stall
+			switch s.State {
+			case monitor.Running:
+				running++
+			case monitor.Stale:
+				stale++
+				warn(fmt.Sprintf("worker %s is stale (no activity for %s)", e.BeadID, s.LastActivity))
+			case monitor.Orphan:
+				orphans++
+				warn(fmt.Sprintf("worker %s is orphaned (pane gone, pid %d still alive)", e.BeadID, e.PID))
+			default:
+				dead++
+				warn(fmt.Sprintf("worker %s is dead (state=%s, pid=%d)", e.BeadID, s.State, e.PID))
+			}
+		}
+		if running > 0 {
+			ok(fmt.Sprintf("%d workers running", running))
+		}
+		if dead > 0 || orphans > 0 {
+			if *fix {
+				fmt.Println("\n  fixing: running gc...")
+				_ = runGC([]string{"--project", *project})
+			} else {
+				warn(fmt.Sprintf("%d dead + %d orphaned workers (run with --fix or bsw gc)", dead, orphans))
+			}
+		}
+	}
+
+	// 4. Check beads access
+	fmt.Println("\n[beads]")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client := beads.Client{Workdir: root}
+	testIssues, err := client.ListByLabel(ctx, "needs-impl")
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "executable file not found") {
+			warn("br CLI not available")
+		} else {
+			warn(fmt.Sprintf("br list failed: %v", err))
+		}
+	} else {
+		unassigned := 0
+		for _, i := range testIssues {
+			if strings.TrimSpace(i.Assignee) == "" {
+				unassigned++
+			}
+		}
+		ok(fmt.Sprintf("br accessible (%d beads with needs-impl, %d unassigned)", len(testIssues), unassigned))
+	}
+
+	// 5. Check tmux
+	fmt.Println("\n[tmux]")
+	if out, err := exec.Command("tmux", "list-sessions").Output(); err != nil {
+		ok("no tmux sessions active")
+	} else {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		bswSessions := 0
+		for _, l := range lines {
+			if strings.HasPrefix(l, "bsw-") {
+				bswSessions++
+			}
+		}
+		ok(fmt.Sprintf("%d tmux sessions (%d bsw-*)", len(lines), bswSessions))
+	}
+
+	// Summary
+	fmt.Println()
+	if issues == 0 {
+		fmt.Println("All checks passed.")
+	} else {
+		fmt.Printf("%d issue(s) found.\n", issues)
 	}
 	return nil
 }

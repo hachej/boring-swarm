@@ -1,0 +1,4 @@
+provider = "claude"
+model = "claude-opus-4-20250514"
+prompt = "personas/prompts/reviewer.md"
+work_label = "needs-review"

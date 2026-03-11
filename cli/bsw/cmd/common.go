@@ -3,11 +3,10 @@ package cmd
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
-
-const defaultActor = "bsw"
 
 func projectRootFromFlag(project string) (string, error) {
 	if project == "" {
@@ -27,37 +26,23 @@ func projectRootFromFlag(project string) (string, error) {
 	return root, nil
 }
 
-func bswDir(projectRoot string) string {
-	return filepath.Join(projectRoot, ".bsw")
+// currentTmuxSession returns the current tmux session name, or "" if not in tmux.
+func currentTmuxSession() string {
+	if os.Getenv("TMUX") == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
-// splitArgs separates a first positional token while preserving all recognized flag tokens.
-// It supports interspersed flag placement: `cmd pos --flag value` and `cmd --flag value pos`.
-func splitArgs(args []string, valueFlags map[string]bool) (flags []string, positional string, extras []string) {
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		if strings.HasPrefix(arg, "-") {
-			flags = append(flags, arg)
-			if strings.Contains(arg, "=") {
-				i++
-				continue
-			}
-			name := strings.TrimLeft(arg, "-")
-			if valueFlags[name] && i+1 < len(args) {
-				flags = append(flags, args[i+1])
-				i += 2
-				continue
-			}
-			i++
-			continue
-		}
-		if positional == "" {
-			positional = arg
-		} else {
-			extras = append(extras, arg)
-		}
-		i++
+// tmuxSessionValue converts the --session flag value to a TmuxSession for SpawnSpec.
+// "new" means create a separate session (empty string). Otherwise pass through.
+func tmuxSessionValue(s string) string {
+	if s == "new" {
+		return ""
 	}
-	return flags, positional, extras
+	return s
 }
