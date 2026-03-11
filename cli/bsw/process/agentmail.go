@@ -49,6 +49,12 @@ func vaultGet(path, field string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// HealthCheck pings the Agent Mail server and returns an error if unreachable.
+func (c AgentMailConfig) HealthCheck() error {
+	_, err := c.call("health_check", map[string]any{})
+	return err
+}
+
 // RegisterWorker registers a worker agent in Agent Mail and returns the assigned name.
 // It ensures the project exists, registers the agent, and sets contact policy to open.
 func (c AgentMailConfig) RegisterWorker(projectKey, provider, model, taskDesc string) (*AgentMailRegistration, error) {

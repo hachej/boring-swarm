@@ -143,7 +143,28 @@ func runDoctor(args []string) error {
 		ok(fmt.Sprintf("br accessible (%d beads with needs-impl, %d unassigned)", len(testIssues), unassigned))
 	}
 
-	// 5. Check tmux
+	// 5. Check agent-mail
+	fmt.Println("\n[agent-mail]")
+	amCfg := process.DefaultAgentMailConfig()
+	if amCfg.Token == "" {
+		warn("agent-mail token not configured (set AGENT_MAIL_TOKEN or store in vault at secret/agent/mail)")
+	} else {
+		ok("agent-mail token configured")
+		// Health check the server
+		if err := amCfg.HealthCheck(); err != nil {
+			warn(fmt.Sprintf("agent-mail server unreachable: %v", err))
+		} else {
+			ok(fmt.Sprintf("agent-mail server ok (%s)", amCfg.URL))
+		}
+	}
+	hookPath := process.InboxCheckHookPath()
+	if hookPath != "" {
+		ok(fmt.Sprintf("inbox nudge hook found (%s)", hookPath))
+	} else {
+		warn("inbox nudge hook not found (check_inbox.sh)")
+	}
+
+	// 6. Check tmux
 	fmt.Println("\n[tmux]")
 	if out, err := exec.Command("tmux", "list-sessions").Output(); err != nil {
 		ok("no tmux sessions active")

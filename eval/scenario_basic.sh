@@ -105,6 +105,21 @@ if echo "$DOCTOR_OUT" | grep -q "br.*found"; then
 else
   fail "doctor finds br CLI"
 fi
+if echo "$DOCTOR_OUT" | grep -q "agent-mail.*token.*configured"; then
+  pass "doctor checks agent-mail token"
+else
+  fail "doctor checks agent-mail token"
+fi
+if echo "$DOCTOR_OUT" | grep -q "agent-mail.*server.*ok"; then
+  pass "doctor checks agent-mail server"
+else
+  fail "doctor checks agent-mail server"
+fi
+if echo "$DOCTOR_OUT" | grep -q "nudge hook.*found"; then
+  pass "doctor finds nudge hook"
+else
+  fail "doctor finds nudge hook"
+fi
 echo
 
 # =========================================================================
