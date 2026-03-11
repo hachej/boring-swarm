@@ -28,15 +28,16 @@ func ValidateBeadID(id string) error {
 }
 
 type WorkerEntry struct {
-	BeadID      string `json:"bead_id"`
-	Persona     string `json:"persona"`
-	Provider    string `json:"provider"`
-	Mode        string `json:"mode"` // "tmux" | "bg"
-	PID         int    `json:"pid"`
-	Pane        string `json:"pane,omitempty"`
-	StartedAt   string `json:"started_at"`
-	StartTimeNs int64  `json:"start_time_ns"` // process start time from /proc for PID reuse detection
-	Log         string `json:"log"`
+	BeadID        string `json:"bead_id"`
+	Persona       string `json:"persona"`
+	Provider      string `json:"provider"`
+	Mode          string `json:"mode"` // "tmux" | "bg"
+	PID           int    `json:"pid"`
+	Pane          string `json:"pane,omitempty"`
+	StartedAt     string `json:"started_at"`
+	StartTimeNs   int64  `json:"start_time_ns"` // process start time from /proc for PID reuse detection
+	Log           string `json:"log"`
+	AgentMailName string `json:"agent_mail_name,omitempty"` // Agent Mail identity
 }
 
 type Registry struct {

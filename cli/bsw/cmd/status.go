@@ -24,15 +24,16 @@ func projectStatus(root string) ([]monitor.Status, error) {
 	statuses := make([]monitor.Status, 0, len(entries))
 	for _, e := range entries {
 		me := monitor.WorkerEntry{
-			BeadID:      e.BeadID,
-			Persona:     e.Persona,
-			Provider:    e.Provider,
-			Mode:        e.Mode,
-			PID:         e.PID,
-			Pane:        e.Pane,
-			StartedAt:   e.StartedAt,
-			StartTimeNs: e.StartTimeNs,
-			Log:         e.Log,
+			BeadID:        e.BeadID,
+			Persona:       e.Persona,
+			Provider:      e.Provider,
+			Mode:          e.Mode,
+			PID:           e.PID,
+			Pane:          e.Pane,
+			StartedAt:     e.StartedAt,
+			StartTimeNs:   e.StartTimeNs,
+			Log:           e.Log,
+			AgentMailName: e.AgentMailName,
 		}
 		statuses = append(statuses, monitor.CheckWorker(me, stallTimeout))
 	}
@@ -76,8 +77,12 @@ func runStatus(args []string) error {
 		if s.Stale {
 			staleTag = " [STALE]"
 		}
-		fmt.Printf("  %-12s %-10s %-6s %-10s pid=%-6d up=%-8s activity=%-10s%s\n",
-			s.BeadID, s.Persona, s.Mode, s.State, s.PID, s.Uptime, s.LastActivity, staleTag)
+		amTag := ""
+		if s.AgentMailName != "" {
+			amTag = fmt.Sprintf(" mail=%s", s.AgentMailName)
+		}
+		fmt.Printf("  %-12s %-10s %-6s %-10s pid=%-6d up=%-8s activity=%-10s%s%s\n",
+			s.BeadID, s.Persona, s.Mode, s.State, s.PID, s.Uptime, s.LastActivity, staleTag, amTag)
 	}
 	return nil
 }

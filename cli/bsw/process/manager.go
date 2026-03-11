@@ -11,16 +11,18 @@ import (
 )
 
 type SpawnSpec struct {
-	BeadID       string
-	Persona      string
-	Provider     string
-	Model        string
-	Effort       string
-	SystemPrompt string // full prompt text
-	UserPrompt   string // bead context
-	ProjectRoot  string
-	Mode         string // "tmux" | "bg"
-	TmuxSession  string // join this session as a window (empty = create new session)
+	BeadID        string
+	Persona       string
+	Provider      string
+	Model         string
+	Effort        string
+	SystemPrompt  string // full prompt text
+	UserPrompt    string // bead context
+	ProjectRoot   string
+	Mode          string // "tmux" | "bg"
+	TmuxSession   string // join this session as a window (empty = create new session)
+	AgentMailEnv  []string // AGENT_MAIL_* env vars for inbox nudge
+	AgentMailName string   // agent name for tmux pane/window title
 }
 
 type Manager struct {
@@ -62,7 +64,7 @@ func (m Manager) spawnBg(s SpawnSpec, provider, logPath string) (WorkerEntry, er
 		return WorkerEntry{}, err
 	}
 	cmd.Dir = s.ProjectRoot
-	cmd.Env = filteredEnv("CLAUDECODE")
+	cmd.Env = FormatProviderEnv(filteredEnv("CLAUDECODE"), s.AgentMailEnv)
 
 	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -110,7 +112,12 @@ func (m Manager) spawnBg(s SpawnSpec, provider, logPath string) (WorkerEntry, er
 
 
 func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, error) {
-	windowName := "bsw-" + s.BeadID
+	// Use agent mail name for tmux label if available, otherwise bead ID
+	label := s.BeadID
+	if s.AgentMailName != "" {
+		label = s.AgentMailName
+	}
+	windowName := "bsw-" + label
 
 	// Build the provider command — TUI mode for interactive tmux
 	shellCmd, err := buildProviderTUICommand(provider, s.Model, s.Effort, s.SystemPrompt, s.UserPrompt, s.ProjectRoot)
@@ -118,23 +125,28 @@ func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, 
 		return WorkerEntry{}, err
 	}
 
+	// Export Agent Mail env vars, then run the provider command
+	envExports := ""
+	for _, e := range s.AgentMailEnv {
+		envExports += "export " + shellQuote(e) + "; "
+	}
 	// TUI runs interactively, tee output to log via script(1) to preserve terminal
-	fullCmd := fmt.Sprintf("cd %s && script -q -c %s %s", shellQuote(s.ProjectRoot), shellQuote(shellCmd), shellQuote(logPath))
+	fullCmd := fmt.Sprintf("cd %s && %sscript -q -c %s %s", shellQuote(s.ProjectRoot), envExports, shellQuote(shellCmd), shellQuote(logPath))
 
 	// Either split a pane in an existing session, or create a new session
 	var paneTarget string
 	if s.TmuxSession != "" {
-		// New pane in current window of the target session
-		tmuxCmd := exec.Command("tmux", "split-window", "-t", s.TmuxSession, "-h", fullCmd)
+		// New window in the target session (each agent gets its own window)
+		tmuxCmd := exec.Command("tmux", "new-window", "-t", s.TmuxSession, "-n", label, fullCmd)
 		if err := tmuxCmd.Run(); err != nil {
-			return WorkerEntry{}, fmt.Errorf("tmux split-window in %s: %w", s.TmuxSession, err)
+			return WorkerEntry{}, fmt.Errorf("tmux new-window in %s: %w", s.TmuxSession, err)
 		}
-		// The new pane is the last one — get its ID
-		out, err := exec.Command("tmux", "display-message", "-t", s.TmuxSession, "-p", "#{pane_id}").Output()
+		// Get the pane ID of the new window
+		out, err := exec.Command("tmux", "display-message", "-t", s.TmuxSession+":"+label, "-p", "#{pane_id}").Output()
 		if err == nil {
 			paneTarget = strings.TrimSpace(string(out))
 		} else {
-			paneTarget = s.TmuxSession
+			paneTarget = s.TmuxSession + ":" + label
 		}
 	} else {
 		// New detached session

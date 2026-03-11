@@ -25,31 +25,33 @@ const (
 
 // Status is the full health snapshot for a single worker.
 type Status struct {
-	BeadID       string `json:"bead"`
-	Persona      string `json:"persona"`
-	Mode         string `json:"mode"`
-	PID          int    `json:"pid"`
-	Pane         string `json:"pane,omitempty"`
-	State        State  `json:"state"`
-	ExitCode     *int   `json:"exit_code"`
-	StartedAt    string `json:"started_at"`
-	Uptime       string `json:"uptime"`
-	LastActivity string `json:"last_activity"`
-	Stale        bool   `json:"stale"`
-	Log          string `json:"log"`
+	BeadID        string `json:"bead"`
+	Persona       string `json:"persona"`
+	Mode          string `json:"mode"`
+	PID           int    `json:"pid"`
+	Pane          string `json:"pane,omitempty"`
+	State         State  `json:"state"`
+	ExitCode      *int   `json:"exit_code"`
+	StartedAt     string `json:"started_at"`
+	Uptime        string `json:"uptime"`
+	LastActivity  string `json:"last_activity"`
+	Stale         bool   `json:"stale"`
+	Log           string `json:"log"`
+	AgentMailName string `json:"agent_mail_name,omitempty"`
 }
 
 // WorkerEntry is the minimal input needed to check a worker's health.
 type WorkerEntry struct {
-	BeadID      string
-	Persona     string
-	Provider    string
-	Mode        string // "tmux" | "bg"
-	PID         int
-	Pane        string
-	StartedAt   string
-	StartTimeNs int64 // process start time from /proc for PID reuse detection
-	Log         string
+	BeadID        string
+	Persona       string
+	Provider      string
+	Mode          string // "tmux" | "bg"
+	PID           int
+	Pane          string
+	StartedAt     string
+	StartTimeNs   int64 // process start time from /proc for PID reuse detection
+	Log           string
+	AgentMailName string
 }
 
 // CheckPID determines whether a process is alive using kill(pid, 0) and checks
@@ -126,13 +128,14 @@ func CheckTmuxPane(pane string) (exists bool, panePID int) {
 // staleness from the log file mtime.
 func CheckWorker(entry WorkerEntry, stallTimeout time.Duration) Status {
 	s := Status{
-		BeadID:    entry.BeadID,
-		Persona:   entry.Persona,
-		Mode:      entry.Mode,
-		PID:       entry.PID,
-		Pane:      entry.Pane,
-		StartedAt: entry.StartedAt,
-		Log:       entry.Log,
+		BeadID:        entry.BeadID,
+		Persona:       entry.Persona,
+		Mode:          entry.Mode,
+		PID:           entry.PID,
+		Pane:          entry.Pane,
+		StartedAt:     entry.StartedAt,
+		Log:           entry.Log,
+		AgentMailName: entry.AgentMailName,
 	}
 
 	// Compute uptime from StartedAt.

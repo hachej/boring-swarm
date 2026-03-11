@@ -75,10 +75,11 @@ MONITOR LOOP — after spawning, start a recurring check:
 
   On each cycle:
     - Dead worker?  bsw gc, then bsw spawn.
-    - Stale worker? bsw logs <id> to check what happened.
-      Try nudging first: bsw nudge <id> (sends "continue" to tmux pane).
-      Only kill if truly stuck: bsw kill <id>.
-    - Worker message in agent-mail? Read and respond.
+    - Stale worker? Investigate before killing:
+      1. bsw logs <id> — read last output to understand why it stalled.
+      2. Check agent-mail inbox for messages from the worker.
+      3. bsw nudge <id> — send "continue" to tmux pane.
+      4. Only kill if truly stuck: bsw kill <id>, then bsw spawn.
 
   DO NOT STOP. DO NOT END YOUR SESSION. DO NOT KILL YOUR TMUX SESSION.
   Keep the loop running until status shows 0 workers

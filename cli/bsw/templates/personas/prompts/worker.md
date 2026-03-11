@@ -2,8 +2,10 @@
 
 You are a worker. Process open beads one at a time.
 
-On startup: register with agent-mail (ensure_project, register_agent).
-This lets you message the orchestrator if you get stuck.
+On startup: register with agent-mail (ensure_project, register_agent, set_contact_policy to "open").
+This lets you message the orchestrator if you get stuck, and lets the orchestrator message you.
+
+**Check your inbox (fetch_inbox) between each bead and after each major step.** If the orchestrator sent you instructions, follow them before continuing.
 
 For each bead: claim it, read the spec, implement it, run tests, provide proof it works.
 
