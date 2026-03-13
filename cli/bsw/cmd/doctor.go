@@ -88,7 +88,7 @@ func runDoctor(args []string) error {
 		running := 0
 		for _, e := range entries {
 			me := monitor.WorkerEntry{
-				BeadID: e.BeadID, Persona: e.Persona, Provider: e.Provider,
+				WorkerID: e.WorkerID, Persona: e.Persona,
 				Mode: e.Mode, PID: e.PID, Pane: e.Pane,
 				StartedAt: e.StartedAt, StartTimeNs: e.StartTimeNs, Log: e.Log,
 			}
@@ -98,13 +98,13 @@ func runDoctor(args []string) error {
 				running++
 			case monitor.Stale:
 				stale++
-				warn(fmt.Sprintf("worker %s is stale (no activity for %s)", e.BeadID, s.LastActivity))
+				warn(fmt.Sprintf("worker %s is stale (no activity for %s)", e.WorkerID, s.LastActivity))
 			case monitor.Orphan:
 				orphans++
-				warn(fmt.Sprintf("worker %s is orphaned (pane gone, pid %d still alive)", e.BeadID, e.PID))
+				warn(fmt.Sprintf("worker %s is orphaned (pane gone, pid %d still alive)", e.WorkerID, e.PID))
 			default:
 				dead++
-				warn(fmt.Sprintf("worker %s is dead (state=%s, pid=%d)", e.BeadID, s.State, e.PID))
+				warn(fmt.Sprintf("worker %s is dead (state=%s, pid=%d)", e.WorkerID, s.State, e.PID))
 			}
 		}
 		if running > 0 {

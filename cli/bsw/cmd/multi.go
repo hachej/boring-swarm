@@ -133,7 +133,7 @@ func printFull(results []projectResult) error {
 				staleTag = " [STALE]"
 			}
 			fmt.Printf("  %-12s %-10s %-6s %-10s pid=%-6d up=%-8s activity=%-10s%s\n",
-				s.BeadID, s.Persona, s.Mode, s.State, s.PID, s.Uptime, s.LastActivity, staleTag)
+				s.WorkerID, s.Persona, s.Mode, s.State, s.PID, s.Uptime, s.LastActivity, staleTag)
 		}
 	}
 	return nil

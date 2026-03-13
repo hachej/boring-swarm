@@ -11,13 +11,13 @@ import (
 )
 
 type SpawnSpec struct {
-	BeadID        string
+	WorkerID      string
 	Persona       string
 	Provider      string
 	Model         string
 	Effort        string
 	SystemPrompt  string // full prompt text
-	UserPrompt    string // bead context
+	UserPrompt    string
 	ProjectRoot   string
 	Mode          string // "tmux" | "bg"
 	TmuxSession   string // join this session as a window (empty = create new session)
@@ -35,7 +35,7 @@ func NewManager(projectRoot string) Manager {
 
 // Spawn starts a worker in either background or tmux mode.
 func (m Manager) Spawn(s SpawnSpec) (WorkerEntry, error) {
-	if err := ValidateBeadID(s.BeadID); err != nil {
+	if err := ValidateWorkerID(s.WorkerID); err != nil {
 		return WorkerEntry{}, err
 	}
 	if s.Mode != "bg" && s.Mode != "tmux" {
@@ -48,7 +48,7 @@ func (m Manager) Spawn(s SpawnSpec) (WorkerEntry, error) {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return WorkerEntry{}, err
 	}
-	logPath := filepath.Join(logDir, s.BeadID+".log")
+	logPath := filepath.Join(logDir, s.WorkerID+".log")
 
 	switch s.Mode {
 	case "tmux":
@@ -99,7 +99,7 @@ func (m Manager) spawnBg(s SpawnSpec, provider, logPath string) (WorkerEntry, er
 
 	pid := cmd.Process.Pid
 	return WorkerEntry{
-		BeadID:      s.BeadID,
+		WorkerID:    s.WorkerID,
 		Persona:     s.Persona,
 		Provider:    provider,
 		Mode:        "bg",
@@ -113,7 +113,7 @@ func (m Manager) spawnBg(s SpawnSpec, provider, logPath string) (WorkerEntry, er
 
 func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, error) {
 	// Use agent mail name for tmux label if available, otherwise bead ID
-	label := s.BeadID
+	label := s.WorkerID
 	if s.AgentMailName != "" {
 		label = s.AgentMailName
 	}
@@ -166,7 +166,7 @@ func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, 
 	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &pid)
 
 	return WorkerEntry{
-		BeadID:      s.BeadID,
+		WorkerID:    s.WorkerID,
 		Persona:     s.Persona,
 		Provider:    provider,
 		Mode:        "tmux",
@@ -204,34 +204,6 @@ func buildProviderCommand(provider, model, effort, systemPrompt, userPrompt, pro
 		return cmd, "", nil
 	default:
 		return nil, "", fmt.Errorf("unsupported provider %q", provider)
-	}
-}
-
-// buildProviderShellCommand returns a non-interactive shell command string (for bg mode).
-func buildProviderShellCommand(provider, model, effort, systemPrompt, userPrompt, projectRoot string) (string, error) {
-	switch provider {
-	case "codex":
-		bin := providerBinary("codex")
-		prompt := systemPrompt + "\n\n" + userPrompt
-		parts := []string{"echo", shellQuote(prompt), "|", shellQuote(bin), "exec", "--json", "--dangerously-bypass-approvals-and-sandbox"}
-		if model != "" {
-			parts = append(parts, "--model", shellQuote(model))
-		}
-		parts = append(parts, "--cd", shellQuote(projectRoot), "-")
-		return strings.Join(parts, " "), nil
-	case "claude":
-		bin := providerBinary("claude")
-		parts := []string{shellQuote(bin), "-p", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"}
-		if model != "" {
-			parts = append(parts, "--model", shellQuote(model))
-		}
-		if strings.TrimSpace(effort) != "" {
-			parts = append(parts, "--effort", shellQuote(strings.TrimSpace(effort)))
-		}
-		parts = append(parts, "--system-prompt", shellQuote(systemPrompt), shellQuote(userPrompt))
-		return strings.Join(parts, " "), nil
-	default:
-		return "", fmt.Errorf("unsupported provider %q", provider)
 	}
 }
 

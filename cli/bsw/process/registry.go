@@ -10,25 +10,25 @@ import (
 	"strings"
 )
 
-var validBeadID = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+var validWorkerID = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
-// ValidateBeadID rejects bead IDs that could cause path traversal or other issues.
-func ValidateBeadID(id string) error {
+// ValidateWorkerID rejects worker IDs that could cause path traversal or other issues.
+func ValidateWorkerID(id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return fmt.Errorf("bead ID is empty")
+		return fmt.Errorf("worker ID is empty")
 	}
-	if !validBeadID.MatchString(id) {
-		return fmt.Errorf("bead ID %q contains invalid characters (allowed: a-z A-Z 0-9 . _ -)", id)
+	if !validWorkerID.MatchString(id) {
+		return fmt.Errorf("worker ID %q contains invalid characters (allowed: a-z A-Z 0-9 . _ -)", id)
 	}
 	if strings.Contains(id, "..") {
-		return fmt.Errorf("bead ID %q contains '..'", id)
+		return fmt.Errorf("worker ID %q contains '..'", id)
 	}
 	return nil
 }
 
 type WorkerEntry struct {
-	BeadID        string `json:"bead_id"`
+	WorkerID      string `json:"worker_id"`
 	Persona       string `json:"persona"`
 	Provider      string `json:"provider"`
 	Mode          string `json:"mode"` // "tmux" | "bg"
@@ -56,14 +56,14 @@ func (r Registry) dir() string {
 	return filepath.Join(r.projectRoot, ".bsw", "workers")
 }
 
-func (r Registry) path(beadID string) string {
-	safe := strings.TrimSpace(beadID)
+func (r Registry) path(workerID string) string {
+	safe := strings.TrimSpace(workerID)
 	return filepath.Join(r.dir(), safe+".json")
 }
 
-// IsActive returns true if a worker for the given bead is registered and its process is alive.
-func (r Registry) IsActive(beadID string) bool {
-	e, err := r.Load(beadID)
+// IsActive returns true if a worker is registered and its process is alive.
+func (r Registry) IsActive(workerID string) bool {
+	e, err := r.Load(workerID)
 	if err != nil {
 		return false
 	}
@@ -71,7 +71,7 @@ func (r Registry) IsActive(beadID string) bool {
 }
 
 func (r Registry) Save(e WorkerEntry) error {
-	if err := ValidateBeadID(e.BeadID); err != nil {
+	if err := ValidateWorkerID(e.WorkerID); err != nil {
 		return fmt.Errorf("registry save: %w", err)
 	}
 	if err := r.Ensure(); err != nil {
@@ -81,7 +81,7 @@ func (r Registry) Save(e WorkerEntry) error {
 	if err != nil {
 		return err
 	}
-	p := r.path(e.BeadID)
+	p := r.path(e.WorkerID)
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
@@ -89,16 +89,16 @@ func (r Registry) Save(e WorkerEntry) error {
 	return os.Rename(tmp, p)
 }
 
-func (r Registry) Delete(beadID string) error {
-	err := os.Remove(r.path(beadID))
+func (r Registry) Delete(workerID string) error {
+	err := os.Remove(r.path(workerID))
 	if err == nil || os.IsNotExist(err) {
 		return nil
 	}
 	return err
 }
 
-func (r Registry) Load(beadID string) (WorkerEntry, error) {
-	b, err := os.ReadFile(r.path(beadID))
+func (r Registry) Load(workerID string) (WorkerEntry, error) {
+	b, err := os.ReadFile(r.path(workerID))
 	if err != nil {
 		return WorkerEntry{}, err
 	}
@@ -130,11 +130,11 @@ func (r Registry) LoadAll() ([]WorkerEntry, error) {
 		if err := json.Unmarshal(b, &we); err != nil {
 			continue
 		}
-		if strings.TrimSpace(we.BeadID) == "" {
+		if strings.TrimSpace(we.WorkerID) == "" {
 			continue
 		}
 		out = append(out, we)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].BeadID < out[j].BeadID })
+	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })
 	return out, nil
 }

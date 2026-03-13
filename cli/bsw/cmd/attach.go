@@ -17,21 +17,21 @@ func runAttach(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return fmt.Errorf("usage: bsw attach <bead-id>")
+		return fmt.Errorf("usage: bsw attach <worker-id>")
 	}
-	beadID := fs.Arg(0)
+	workerID := fs.Arg(0)
 	root, err := projectRootFromFlag(*project)
 	if err != nil {
 		return err
 	}
 
 	reg := process.NewRegistry(root)
-	entry, err := reg.Load(beadID)
+	entry, err := reg.Load(workerID)
 	if err != nil {
-		return fmt.Errorf("worker %s not found in registry", beadID)
+		return fmt.Errorf("worker %s not found in registry", workerID)
 	}
 	if entry.Mode != "tmux" || entry.Pane == "" {
-		return fmt.Errorf("worker %s is not in tmux mode", beadID)
+		return fmt.Errorf("worker %s is not in tmux mode", workerID)
 	}
 
 	// Exec into tmux attach (replaces this process)

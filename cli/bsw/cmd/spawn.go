@@ -71,7 +71,7 @@ func runSpawn(args []string) error {
 			*workerID = fmt.Sprintf("worker-%d", time.Now().UnixMilli()%1000000)
 		}
 	}
-	if err := process.ValidateBeadID(*workerID); err != nil {
+	if err := process.ValidateWorkerID(*workerID); err != nil {
 		return err
 	}
 
@@ -104,7 +104,7 @@ func runSpawn(args []string) error {
 
 	mgr := process.NewManager(root)
 	entry, err := mgr.Spawn(process.SpawnSpec{
-		BeadID:        *workerID,
+		WorkerID:      *workerID,
 		Persona:       *personaName,
 		Provider:      p.Provider,
 		Model:         p.Model,

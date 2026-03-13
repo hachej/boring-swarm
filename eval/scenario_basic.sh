@@ -532,7 +532,7 @@ FAKE_REG_DIR="$WORKDIR/.bsw/workers"
 mkdir -p "$FAKE_REG_DIR"
 cat > "$FAKE_REG_DIR/dead-worker-123.json" <<'FAKEJSON'
 {
-  "bead_id": "dead-worker-123",
+  "worker_id": "dead-worker-123",
   "persona": "worker",
   "provider": "codex",
   "mode": "bg",
@@ -632,7 +632,7 @@ echo "[14. doctor --fix]"
 # Insert another dead worker
 cat > "$FAKE_REG_DIR/dead-fix-test.json" <<'FAKEJSON2'
 {
-  "bead_id": "dead-fix-test",
+  "worker_id": "dead-fix-test",
   "persona": "worker",
   "provider": "codex",
   "mode": "bg",

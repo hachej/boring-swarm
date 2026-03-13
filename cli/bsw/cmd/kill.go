@@ -18,18 +18,18 @@ func runKill(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return fmt.Errorf("usage: bsw kill <bead-id>")
+		return fmt.Errorf("usage: bsw kill <worker-id>")
 	}
-	beadID := fs.Arg(0)
+	workerID := fs.Arg(0)
 	root, err := projectRootFromFlag(*project)
 	if err != nil {
 		return err
 	}
 
 	reg := process.NewRegistry(root)
-	entry, err := reg.Load(beadID)
+	entry, err := reg.Load(workerID)
 	if err != nil {
-		return fmt.Errorf("worker %s not found in registry", beadID)
+		return fmt.Errorf("worker %s not found in registry", workerID)
 	}
 
 	// Verify PID belongs to us before killing
@@ -52,24 +52,24 @@ func runKill(args []string) error {
 			}
 		}
 		if !terminated {
-			return fmt.Errorf("failed to terminate worker %s (pid=%d) — not cleaning up", beadID, entry.PID)
+			return fmt.Errorf("failed to terminate worker %s (pid=%d) — not cleaning up", workerID, entry.PID)
 		}
 	}
 
-	// Only unclaim and delete registry after successful termination
+	// Clear assignee and delete registry after successful termination
 	var errs []string
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client := beads.Client{Workdir: root}
-	if err := client.ClearAssignee(ctx, beadID); err != nil {
-		errs = append(errs, fmt.Sprintf("unclaim: %v", err))
+	if err := client.ClearAssignee(ctx, workerID); err != nil {
+		errs = append(errs, fmt.Sprintf("clear assignee: %v", err))
 	}
 
-	if err := reg.Delete(beadID); err != nil {
+	if err := reg.Delete(workerID); err != nil {
 		errs = append(errs, fmt.Sprintf("registry delete: %v", err))
 	}
 
-	fmt.Printf("Killed worker on %s (pid=%d)\n", beadID, entry.PID)
+	fmt.Printf("Killed worker %s (pid=%d)\n", workerID, entry.PID)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "  warning: %s\n", e)
 	}

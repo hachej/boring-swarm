@@ -20,18 +20,18 @@ func runLogs(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return fmt.Errorf("usage: bsw logs <bead-id>")
+		return fmt.Errorf("usage: bsw logs <worker-id>")
 	}
-	beadID := fs.Arg(0)
+	workerID := fs.Arg(0)
 	root, err := projectRootFromFlag(*project)
 	if err != nil {
 		return err
 	}
 
 	reg := process.NewRegistry(root)
-	entry, err := reg.Load(beadID)
+	entry, err := reg.Load(workerID)
 	if err != nil {
-		return fmt.Errorf("worker %s not found in registry", beadID)
+		return fmt.Errorf("worker %s not found in registry", workerID)
 	}
 
 	if _, err := os.Stat(entry.Log); err != nil {

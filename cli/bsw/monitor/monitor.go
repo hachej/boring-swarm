@@ -25,7 +25,7 @@ const (
 
 // Status is the full health snapshot for a single worker.
 type Status struct {
-	BeadID        string `json:"bead"`
+	WorkerID      string `json:"worker_id"`
 	Persona       string `json:"persona"`
 	Mode          string `json:"mode"`
 	PID           int    `json:"pid"`
@@ -42,15 +42,14 @@ type Status struct {
 
 // WorkerEntry is the minimal input needed to check a worker's health.
 type WorkerEntry struct {
-	BeadID        string
-	Persona       string
-	Provider      string
-	Mode          string // "tmux" | "bg"
-	PID           int
-	Pane          string
-	StartedAt     string
-	StartTimeNs   int64 // process start time from /proc for PID reuse detection
-	Log           string
+	WorkerID    string
+	Persona     string
+	Mode        string // "tmux" | "bg"
+	PID         int
+	Pane        string
+	StartedAt   string
+	StartTimeNs int64 // process start time from /proc for PID reuse detection
+	Log         string
 	AgentMailName string
 }
 
@@ -128,7 +127,7 @@ func CheckTmuxPane(pane string) (exists bool, panePID int) {
 // staleness from the log file mtime.
 func CheckWorker(entry WorkerEntry, stallTimeout time.Duration) Status {
 	s := Status{
-		BeadID:        entry.BeadID,
+		WorkerID:      entry.WorkerID,
 		Persona:       entry.Persona,
 		Mode:          entry.Mode,
 		PID:           entry.PID,
