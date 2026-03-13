@@ -86,12 +86,14 @@ MONITOR LOOP — after spawning, start a recurring check:
   /loop 1m bsw status --json && br list --status open
 
   On each cycle:
-    - Dead worker?  bsw gc, then bsw spawn -mode tmux.
-    - Stale worker? Investigate before killing:
-      1. bsw logs <id> — read last output to understand why it stalled.
-      2. Check agent-mail inbox for messages from the worker.
-      3. bsw nudge <id> — send "continue" to tmux pane.
-      4. Only kill if truly stuck: bsw kill <id>, then bsw spawn -mode tmux.
+    1. CHECK YOUR INBOX first (fetch_inbox). Slack messages and worker
+       reports arrive here. Read and act on them before anything else.
+    2. Dead worker?  bsw gc, then bsw spawn -mode tmux.
+    3. Stale worker? Investigate before killing:
+       a. bsw logs <id> — read last output to understand why it stalled.
+       b. Check agent-mail inbox for messages from the worker.
+       c. bsw nudge <id> — send "continue" to tmux pane.
+       d. Only kill if truly stuck: bsw kill <id>, then bsw spawn -mode tmux.
 
   DO NOT STOP. DO NOT END YOUR SESSION. DO NOT KILL YOUR TMUX SESSION.
   Keep the loop running until status shows 0 workers
