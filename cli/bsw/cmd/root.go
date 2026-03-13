@@ -73,26 +73,34 @@ Workers are codex/claude agents. They pick their own beads via br robot next.
 Just spawn them — don't configure anything.
 
 START:
-  1. bsw register              (register as orchestrator, set up Slack)
+  1. bsw register              (register as orchestrator, set up Slack channel)
   2. br list --status open      (check there is work)
-  3. bsw spawn                  (spawn workers)
-  4. bsw spawn
+  3. bsw spawn -mode tmux       (spawn workers as tmux panes)
+  4. bsw spawn -mode tmux
+
+  Register saves your tmux pane so Slack messages wake you via nudge.
+  Workers spawn as split panes in your current tmux session.
 
 MONITOR LOOP — after spawning, start a recurring check:
 
-  /loop 30s bsw status --json && br list --status open
+  /loop 1m bsw status --json && br list --status open
 
   On each cycle:
-    - Dead worker?  bsw gc, then bsw spawn.
+    - Dead worker?  bsw gc, then bsw spawn -mode tmux.
     - Stale worker? Investigate before killing:
       1. bsw logs <id> — read last output to understand why it stalled.
       2. Check agent-mail inbox for messages from the worker.
       3. bsw nudge <id> — send "continue" to tmux pane.
-      4. Only kill if truly stuck: bsw kill <id>, then bsw spawn.
+      4. Only kill if truly stuck: bsw kill <id>, then bsw spawn -mode tmux.
 
   DO NOT STOP. DO NOT END YOUR SESSION. DO NOT KILL YOUR TMUX SESSION.
   Keep the loop running until status shows 0 workers
   AND br list --status open shows 0 beads.
   Only then: bsw stop (this stops workers, NOT your session)
+
+SLACK:
+  Messages in your Slack channel are forwarded to you via Agent Mail.
+  The bridge calls "bsw nudge" to wake you when idle.
+  Reply via send_message to GoldOwl — it posts back to Slack.
 `)
 }

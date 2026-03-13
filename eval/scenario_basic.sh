@@ -818,6 +818,24 @@ echo
 # =========================================================================
 # Kill any leftover workers
 bsw stop --project "$WORKDIR" >/dev/null 2>&1 || true
+
+# Clean eval project from bridge config + archive its Slack channel
+BRIDGE_CFG="/home/ubuntu/projects/openclaw/config.yaml"
+if [ -f "$BRIDGE_CFG" ]; then
+  python3 -c "
+import yaml, sys
+cfg_path = sys.argv[1]
+workdir = sys.argv[2]
+with open(cfg_path) as f:
+    cfg = yaml.safe_load(f)
+projects = cfg.get('projects', [])
+cfg['projects'] = [p for p in projects if not p.get('project_key','').startswith('/tmp/bsw-eval-')]
+with open(cfg_path, 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False)
+print(f'Cleaned eval entries from {cfg_path}')
+" "$BRIDGE_CFG" "$WORKDIR" 2>/dev/null || true
+fi
+
 find "$WORKDIR" -mindepth 1 -delete 2>/dev/null || true
 rmdir "$WORKDIR" 2>/dev/null || true
 
