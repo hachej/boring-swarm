@@ -56,7 +56,12 @@ export MOCK_CODEX_DURATION=60  # keep alive long enough for all tests
 
 # Ensure vault env is available (non-login shells may not have it)
 export VAULT_ADDR="${VAULT_ADDR:-http://100.77.36.113:8200}"
-if [ -z "${VAULT_TOKEN:-}" ] && [ -f ~/.vault-token ]; then
+# The current shell may have a restricted VAULT_TOKEN (agent-scoped) that can't
+# read secret/agent/mail. Always prefer the login shell's token for eval.
+_LOGIN_VAULT_TOKEN="$(bash -lc 'echo $VAULT_TOKEN' 2>/dev/null || echo '')"
+if [ -n "$_LOGIN_VAULT_TOKEN" ]; then
+  export VAULT_TOKEN="$_LOGIN_VAULT_TOKEN"
+elif [ -z "${VAULT_TOKEN:-}" ] && [ -f ~/.vault-token ]; then
   export VAULT_TOKEN="$(cat ~/.vault-token)"
 fi
 
