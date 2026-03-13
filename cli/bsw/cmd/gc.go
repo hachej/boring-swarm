@@ -33,12 +33,7 @@ func runGC(args []string) error {
 	client := beads.Client{Workdir: root}
 	cleaned := 0
 	for _, e := range entries {
-		me := monitor.WorkerEntry{
-			WorkerID: e.WorkerID, Persona: e.Persona,
-			Mode: e.Mode, PID: e.PID, Pane: e.Pane,
-			StartedAt: e.StartedAt, StartTimeNs: e.StartTimeNs, Log: e.Log,
-		}
-		s := monitor.CheckWorker(me, 0)
+		s := monitor.CheckWorker(e, 0)
 		if s.State == monitor.Running || s.State == monitor.Stale {
 			continue // still alive
 		}
@@ -63,10 +58,10 @@ func runGC(args []string) error {
 			fmt.Printf("  [dry-run] would clean %s (state=%s, pid=%d)\n", e.WorkerID, s.State, e.PID)
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 			if err := client.ClearAssignee(ctx, e.WorkerID); err != nil {
 				fmt.Fprintf(os.Stderr, "  warning: clear assignee %s: %v\n", e.WorkerID, err)
 			}
-			cancel()
 			if err := reg.Delete(e.WorkerID); err != nil {
 				fmt.Fprintf(os.Stderr, "  warning: registry delete %s: %v\n", e.WorkerID, err)
 			}

@@ -87,12 +87,7 @@ func runDoctor(args []string) error {
 		stale := 0
 		running := 0
 		for _, e := range entries {
-			me := monitor.WorkerEntry{
-				WorkerID: e.WorkerID, Persona: e.Persona,
-				Mode: e.Mode, PID: e.PID, Pane: e.Pane,
-				StartedAt: e.StartedAt, StartTimeNs: e.StartTimeNs, Log: e.Log,
-			}
-			s := monitor.CheckWorker(me, 10*60*1e9) // 10m stall
+			s := monitor.CheckWorker(e, 10*time.Minute)
 			switch s.State {
 			case monitor.Running:
 				running++

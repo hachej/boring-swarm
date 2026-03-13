@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"boring-swarm/cli/bsw/process"
 )
 
 // State represents the lifecycle state of a worker process.
@@ -38,19 +40,6 @@ type Status struct {
 	Stale         bool   `json:"stale"`
 	Log           string `json:"log"`
 	AgentMailName string `json:"agent_mail_name,omitempty"`
-}
-
-// WorkerEntry is the minimal input needed to check a worker's health.
-type WorkerEntry struct {
-	WorkerID    string
-	Persona     string
-	Mode        string // "tmux" | "bg"
-	PID         int
-	Pane        string
-	StartedAt   string
-	StartTimeNs int64 // process start time from /proc for PID reuse detection
-	Log         string
-	AgentMailName string
 }
 
 // CheckPID determines whether a process is alive using kill(pid, 0) and checks
@@ -125,7 +114,7 @@ func CheckTmuxPane(pane string) (exists bool, panePID int) {
 // CheckWorker builds a full Status for the given WorkerEntry. It dispatches to
 // background or tmux checking logic and computes uptime, last activity, and
 // staleness from the log file mtime.
-func CheckWorker(entry WorkerEntry, stallTimeout time.Duration) Status {
+func CheckWorker(entry process.WorkerEntry, stallTimeout time.Duration) Status {
 	s := Status{
 		WorkerID:      entry.WorkerID,
 		Persona:       entry.Persona,
@@ -162,7 +151,7 @@ func CheckWorker(entry WorkerEntry, stallTimeout time.Duration) Status {
 }
 
 // checkBgWorker checks a background process by PID with start time verification.
-func checkBgWorker(entry WorkerEntry) (State, *int) {
+func checkBgWorker(entry process.WorkerEntry) (State, *int) {
 	alive, exitCode := CheckPID(entry.PID)
 	if !alive {
 		if exitCode != nil {
@@ -180,7 +169,7 @@ func checkBgWorker(entry WorkerEntry) (State, *int) {
 
 // checkTmuxWorker checks a tmux-based worker: first verifies the pane exists,
 // then checks the process inside the pane.
-func checkTmuxWorker(entry WorkerEntry) (State, *int) {
+func checkTmuxWorker(entry process.WorkerEntry) (State, *int) {
 	if entry.Pane == "" {
 		return Dead, nil
 	}

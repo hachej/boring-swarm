@@ -156,7 +156,9 @@ func (c AgentMailConfig) call(tool string, args map[string]any) (map[string]any,
 	if isErr, ok := result["isError"].(bool); ok && isErr {
 		if content, ok := result["content"].([]any); ok && len(content) > 0 {
 			if block, ok := content[0].(map[string]any); ok {
-				return nil, fmt.Errorf("%s", block["text"])
+				if text, ok := block["text"].(string); ok {
+					return nil, fmt.Errorf("%s", text)
+				}
 			}
 		}
 		return nil, fmt.Errorf("tool returned error")

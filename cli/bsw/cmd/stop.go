@@ -61,10 +61,10 @@ func runStop(args []string) error {
 
 		// Clear assignee and clean up
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		if err := client.ClearAssignee(ctx, e.WorkerID); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: clear assignee %s: %v\n", e.WorkerID, err)
 		}
-		cancel()
 		if err := reg.Delete(e.WorkerID); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: registry delete %s: %v\n", e.WorkerID, err)
 		}

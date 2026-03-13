@@ -44,12 +44,19 @@ func runRegister(args []string) error {
 
 	// Write orchestrator file
 	orchFile := filepath.Join(root, ".bsw", "orchestrator.json")
-	os.MkdirAll(filepath.Dir(orchFile), 0o755)
-	orchData, _ := json.MarshalIndent(map[string]string{
+	if err := os.MkdirAll(filepath.Dir(orchFile), 0o755); err != nil {
+		return fmt.Errorf("create .bsw dir: %w", err)
+	}
+	orchData, err := json.MarshalIndent(map[string]string{
 		"name":    reg.Name,
 		"project": absRoot,
 	}, "", "  ")
-	os.WriteFile(orchFile, orchData, 0o644)
+	if err != nil {
+		return fmt.Errorf("marshal orchestrator data: %w", err)
+	}
+	if err := os.WriteFile(orchFile, orchData, 0o644); err != nil {
+		return fmt.Errorf("write orchestrator file: %w", err)
+	}
 
 	// Update bridge config
 	if *bridgeConfig != "" {

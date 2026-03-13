@@ -23,18 +23,7 @@ func projectStatus(root string) ([]monitor.Status, error) {
 	stallTimeout := 10 * time.Minute
 	statuses := make([]monitor.Status, 0, len(entries))
 	for _, e := range entries {
-		me := monitor.WorkerEntry{
-			WorkerID:      e.WorkerID,
-			Persona:       e.Persona,
-			Mode:          e.Mode,
-			PID:           e.PID,
-			Pane:          e.Pane,
-			StartedAt:     e.StartedAt,
-			StartTimeNs:   e.StartTimeNs,
-			Log:           e.Log,
-			AgentMailName: e.AgentMailName,
-		}
-		statuses = append(statuses, monitor.CheckWorker(me, stallTimeout))
+		statuses = append(statuses, monitor.CheckWorker(e, stallTimeout))
 	}
 	return statuses, nil
 }

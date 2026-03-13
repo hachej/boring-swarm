@@ -6,19 +6,7 @@ AI agent swarm process manager. Single Go binary at `cli/bsw/`.
 
 ```bash
 cd cli/bsw && go build -o ~/.local/bin/bsw .
-bash eval/scenario_basic.sh   # 65 tests, expects Agent Mail running
-```
-
-## Structure
-
-```
-cli/bsw/
-  cmd/           All commands (spawn, status, kill, stop, gc, logs, etc.)
-  process/       Process lifecycle, registry (.bsw/workers/*.json), Agent Mail client
-  monitor/       Health checks: PID alive, zombie, tmux pane, stale detection
-  persona/       TOML persona loader
-  beads/         br CLI wrapper (list beads, clear assignees)
-  templates/     Embedded persona templates (worker.toml, reviewer.toml, prompts/)
+bash eval/scenario_basic.sh   # 76 tests, expects Agent Mail running
 ```
 
 ## Key files

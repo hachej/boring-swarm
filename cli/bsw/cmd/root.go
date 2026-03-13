@@ -53,7 +53,8 @@ func printUsage() {
 You are an orchestrator. Spawn workers, monitor them, keep them running.
 
 Commands:
-  bsw spawn                         Spawn a worker (codex, yolo mode)
+  bsw init                          Scaffold personas and prompts
+  bsw spawn                         Spawn a worker
   bsw status [--json]               Worker health (pid, uptime, activity)
   bsw kill <worker-id>              Kill a worker
   bsw stop                          Stop all workers (NOT your session)
@@ -62,9 +63,13 @@ Commands:
   bsw nudge <worker-id>             Send "continue" to stale tmux worker
   bsw attach <worker-id>            Attach to tmux worker
   bsw doctor [--fix]                Check setup
+  bsw watch [--interval 30s]        Continuous monitor loop
+  bsw list-work --label <label>     Show available beads by label
+  bsw prompt <persona>              Print a persona's system prompt
   bsw register                      Register as orchestrator (agent-mail + Slack)
+  bsw multi-status                  Status across multiple projects
 
-Workers are codex agents. They pick their own beads via br robot next.
+Workers are codex/claude agents. They pick their own beads via br robot next.
 Just spawn them — don't configure anything.
 
 START:
