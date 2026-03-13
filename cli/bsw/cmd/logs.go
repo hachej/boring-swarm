@@ -51,8 +51,8 @@ func runLogs(args []string) error {
 		if err != nil {
 			return err
 		}
-		os.Stdout.Write(data)
-		return nil
+		_, err = os.Stdout.Write(data)
+		return err
 	}
 
 	// Default: show last N lines

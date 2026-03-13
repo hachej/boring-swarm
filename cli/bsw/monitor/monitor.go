@@ -160,9 +160,12 @@ func checkBgWorker(entry process.WorkerEntry) (State, *int) {
 		return Dead, nil
 	}
 	// PID is alive — verify it's the same process we spawned (not a recycled PID).
-	if entry.StartTimeNs > 0 && !verifySameProcess(entry.PID, entry.StartTimeNs) {
-		code := 1
-		return Dead, &code // original process is gone, PID was recycled
+	if entry.StartTimeNs > 0 {
+		actual := process.ProcStartTime(entry.PID)
+		if actual != 0 && actual != entry.StartTimeNs {
+			code := 1
+			return Dead, &code // original process is gone, PID was recycled
+		}
 	}
 	return Running, nil
 }
@@ -198,28 +201,6 @@ func checkTmuxWorker(entry process.WorkerEntry) (State, *int) {
 	return ExitedErr, exitCode
 }
 
-// verifySameProcess checks if the process at PID has the expected start time from /proc.
-func verifySameProcess(pid int, expectedStartTime int64) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return true // can't read /proc, assume it's ours (conservative)
-	}
-	s := string(data)
-	idx := strings.LastIndex(s, ")")
-	if idx < 0 || idx+2 >= len(s) {
-		return true
-	}
-	fields := strings.Fields(s[idx+2:])
-	if len(fields) < 20 {
-		return true
-	}
-	var actual int64
-	fmt.Sscanf(fields[19], "%d", &actual)
-	if actual == 0 {
-		return true
-	}
-	return actual == expectedStartTime
-}
 
 // computeUptime parses a StartedAt timestamp (RFC3339) and returns a
 // human-readable duration string.

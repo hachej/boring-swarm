@@ -81,7 +81,7 @@ func (m Manager) spawnBg(s SpawnSpec, provider, logPath string) (WorkerEntry, er
 		}
 		go func() {
 			defer pipe.Close()
-			pipe.Write([]byte(stdin))
+			_, _ = pipe.Write([]byte(stdin))
 		}()
 	}
 
@@ -105,7 +105,7 @@ func (m Manager) spawnBg(s SpawnSpec, provider, logPath string) (WorkerEntry, er
 		Mode:        "bg",
 		PID:         pid,
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
-		StartTimeNs: procStartTime(pid),
+		StartTimeNs: ProcStartTime(pid),
 		Log:         logPath,
 	}, nil
 }
@@ -173,7 +173,7 @@ func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, 
 		PID:         pid,
 		Pane:        paneTarget,
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
-		StartTimeNs: procStartTime(pid),
+		StartTimeNs: ProcStartTime(pid),
 		Log:         logPath,
 	}, nil
 }
@@ -344,9 +344,9 @@ func TerminateTmux(pane string) error {
 	return nil
 }
 
-// procStartTime reads the process start time from /proc/<pid>/stat (field 22).
+// ProcStartTime reads the process start time from /proc/<pid>/stat (field 22).
 // Returns 0 if unreadable. Used to detect PID reuse.
-func procStartTime(pid int) int64 {
+func ProcStartTime(pid int) int64 {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return 0
@@ -362,12 +362,10 @@ func procStartTime(pid int) int64 {
 	if len(fields) < 20 {
 		return 0
 	}
-	v, err := fmt.Sscanf(fields[19], "%d", new(int64))
-	if err != nil || v != 1 {
+	var ns int64
+	if _, err := fmt.Sscanf(fields[19], "%d", &ns); err != nil {
 		return 0
 	}
-	var ns int64
-	fmt.Sscanf(fields[19], "%d", &ns)
 	return ns
 }
 
@@ -380,7 +378,7 @@ func IsOurProcess(pid int, expectedStartTime int64) bool {
 	if expectedStartTime == 0 {
 		return true // no start time recorded, fall back to PID-only check
 	}
-	actual := procStartTime(pid)
+	actual := ProcStartTime(pid)
 	if actual == 0 {
 		return true // can't read /proc, fall back to PID-only check
 	}
