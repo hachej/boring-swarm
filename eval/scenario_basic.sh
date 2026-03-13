@@ -591,7 +591,7 @@ sleep 1
 if bsw status --json --project "$WORKDIR" 2>/dev/null | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
-assert any(w['bead']=='kill-test' and w['state']=='running' for w in d)
+assert any(w['worker_id']=='kill-test' and w['state']=='running' for w in d)
 " 2>/dev/null; then
   pass "kill-test worker is running"
 else
