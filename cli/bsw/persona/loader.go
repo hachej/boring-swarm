@@ -7,16 +7,14 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"gopkg.in/yaml.v3"
 )
 
 // Persona defines an agent persona loaded from a TOML file.
 type Persona struct {
-	Provider  string `toml:"provider"`
-	Model     string `toml:"model"`
-	Prompt    string `toml:"prompt"`      // path to prompt .md file
-	WorkLabel string `toml:"work_label"`
-	Effort    string `toml:"effort"`      // low|medium|high, optional
+	Provider string `toml:"provider"`
+	Model    string `toml:"model"`
+	Prompt   string `toml:"prompt"`  // path to prompt .md file
+	Effort   string `toml:"effort"`  // low|medium|high, optional
 }
 
 // Load reads a single persona from a TOML file.
@@ -55,34 +53,3 @@ func LoadDir(dir string) (map[string]Persona, error) {
 	return personas, nil
 }
 
-// PlaybookEntry defines how many instances of a persona to run.
-type PlaybookEntry struct {
-	Count int `yaml:"count"`
-}
-
-// Hooks defines optional shell commands to run before/after a playbook run.
-type Hooks struct {
-	BeforeRun string `yaml:"before_run"`
-	AfterRun  string `yaml:"after_run"`
-}
-
-// Playbook defines a named collection of personas to run together.
-type Playbook struct {
-	Name         string                   `yaml:"name"`
-	Personas     map[string]PlaybookEntry `yaml:"personas"`
-	Hooks        Hooks                    `yaml:"hooks"`
-	StallTimeout string                   `yaml:"stall_timeout"` // e.g. "10m"
-}
-
-// LoadPlaybook reads a YAML playbook file.
-func LoadPlaybook(path string) (Playbook, error) {
-	var pb Playbook
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return pb, fmt.Errorf("persona: read playbook %s: %w", path, err)
-	}
-	if err := yaml.Unmarshal(data, &pb); err != nil {
-		return pb, fmt.Errorf("persona: parse playbook %s: %w", path, err)
-	}
-	return pb, nil
-}

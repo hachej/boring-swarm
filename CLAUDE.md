@@ -17,7 +17,7 @@ cli/bsw/
   process/       Process lifecycle, registry (.bsw/workers/*.json), Agent Mail client
   monitor/       Health checks: PID alive, zombie, tmux pane, stale detection
   persona/       TOML persona loader
-  beads/         br CLI wrapper (list, claim, unclaim beads)
+  beads/         br CLI wrapper (list beads, clear assignees)
   templates/     Embedded persona templates (worker.toml, reviewer.toml, prompts/)
 ```
 

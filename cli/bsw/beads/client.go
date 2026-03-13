@@ -25,6 +25,16 @@ type Issue struct {
 	Labels      []string `json:"labels"`
 }
 
+// List returns all open beads (limited to limit, 0 = all).
+func (c Client) List(ctx context.Context, limit int) ([]Issue, error) {
+	args := []string{"list", "--json", "--limit", strconv.Itoa(limit)}
+	var out []Issue
+	if err := c.runJSON(ctx, args, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c Client) ListByLabel(ctx context.Context, label string) ([]Issue, error) {
 	args := []string{"list", "--json", "--limit", "0", "--label", label}
 	var out []Issue

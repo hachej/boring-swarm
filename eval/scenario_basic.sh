@@ -663,10 +663,10 @@ echo
 echo "[15. list-work]"
 # We created 3 beads earlier with no label, so list-work needs a label
 # Label the beads first
-br label "$BD1" needs-impl >/dev/null 2>&1 || true
-br label "$BD2" needs-impl >/dev/null 2>&1 || true
+br label "$BD1" todo >/dev/null 2>&1 || true
+br label "$BD2" todo >/dev/null 2>&1 || true
 
-LISTWORK_OUT=$(bsw list-work --label needs-impl --project "$WORKDIR" 2>&1 || true)
+LISTWORK_OUT=$(bsw list-work --label todo --project "$WORKDIR" 2>&1 || true)
 if echo "$LISTWORK_OUT" | grep -q "Available beads"; then
   pass "list-work shows available beads"
 else
@@ -679,7 +679,7 @@ else
 fi
 
 # JSON mode
-LISTWORK_JSON=$(bsw list-work --label needs-impl --json --project "$WORKDIR" 2>/dev/null || echo "[]")
+LISTWORK_JSON=$(bsw list-work --label todo --json --project "$WORKDIR" 2>/dev/null || echo "[]")
 if echo "$LISTWORK_JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
   pass "list-work --json outputs valid JSON"
 else

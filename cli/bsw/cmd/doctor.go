@@ -125,7 +125,7 @@ func runDoctor(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	client := beads.Client{Workdir: root}
-	testIssues, err := client.ListByLabel(ctx, "needs-impl")
+	allIssues, err := client.List(ctx, 0)
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "executable file not found") {
@@ -134,13 +134,13 @@ func runDoctor(args []string) error {
 			warn(fmt.Sprintf("br list failed: %v", err))
 		}
 	} else {
-		unassigned := 0
-		for _, i := range testIssues {
-			if strings.TrimSpace(i.Assignee) == "" {
-				unassigned++
+		open := 0
+		for _, i := range allIssues {
+			if strings.EqualFold(i.Status, "open") {
+				open++
 			}
 		}
-		ok(fmt.Sprintf("br accessible (%d beads with needs-impl, %d unassigned)", len(testIssues), unassigned))
+		ok(fmt.Sprintf("br accessible (%d beads, %d open)", len(allIssues), open))
 	}
 
 	// 5. Check agent-mail
