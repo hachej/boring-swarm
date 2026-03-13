@@ -136,18 +136,13 @@ func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, 
 	// Either split a pane in an existing session, or create a new session
 	var paneTarget string
 	if s.TmuxSession != "" {
-		// New window in the target session (each agent gets its own window)
-		tmuxCmd := exec.Command("tmux", "new-window", "-t", s.TmuxSession, "-n", label, fullCmd)
-		if err := tmuxCmd.Run(); err != nil {
-			return WorkerEntry{}, fmt.Errorf("tmux new-window in %s: %w", s.TmuxSession, err)
+		// Split a new pane in the target session (stays in same window)
+		out, err := exec.Command("tmux", "split-window", "-t", s.TmuxSession, "-d",
+			"-P", "-F", "#{pane_id}", fullCmd).Output()
+		if err != nil {
+			return WorkerEntry{}, fmt.Errorf("tmux split-window in %s: %w", s.TmuxSession, err)
 		}
-		// Get the pane ID of the new window
-		out, err := exec.Command("tmux", "display-message", "-t", s.TmuxSession+":"+label, "-p", "#{pane_id}").Output()
-		if err == nil {
-			paneTarget = strings.TrimSpace(string(out))
-		} else {
-			paneTarget = s.TmuxSession + ":" + label
-		}
+		paneTarget = strings.TrimSpace(string(out))
 	} else {
 		// New detached session
 		tmuxCmd := exec.Command("tmux", "new-session", "-d", "-s", windowName, fullCmd)
