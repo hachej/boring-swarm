@@ -730,11 +730,11 @@ if [ -n "$AGENT_MAIL_TOKEN" ]; then
   else
     fail "bsw register: $REG_OUT"
   fi
-  # Should output env vars
-  if echo "$REG_OUT" | grep -q "AGENT_MAIL_AGENT="; then
-    pass "register outputs env vars"
+  # Should output registration confirmation
+  if echo "$REG_OUT" | grep -q "Registered orchestrator"; then
+    pass "register outputs confirmation"
   else
-    fail "register outputs env vars"
+    fail "register outputs confirmation"
   fi
 else
   echo "  SKIP  register (no agent-mail token)"

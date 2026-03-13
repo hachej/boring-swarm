@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"boring-swarm/cli/bsw/process"
 
@@ -78,6 +79,29 @@ func runRegister(args []string) error {
 		signalBridge()
 	}
 
+	// Save orchestrator as a worker entry so nudge can find the tmux pane
+	pane := currentTmuxPane()
+	if pane != "" {
+		regEntry := process.WorkerEntry{
+			WorkerID:      reg.Name,
+			Persona:       *personaName,
+			Provider:      "claude",
+			Mode:          "tmux",
+			PID:           os.Getpid(),
+			Pane:          pane,
+			StartedAt:     time.Now().UTC().Format(time.RFC3339),
+			StartTimeNs:   process.ProcStartTime(os.Getpid()),
+			Log:           "",
+			AgentMailName: reg.Name,
+		}
+		workerReg := process.NewRegistry(root)
+		if err := workerReg.Save(regEntry); err != nil {
+			fmt.Printf("  warn: worker registry save failed: %v\n", err)
+		} else {
+			fmt.Printf("  registry: saved pane %s for nudge\n", pane)
+		}
+	}
+
 	// Announce in Slack via operator
 	operator := process.OperatorName()
 	subject := fmt.Sprintf("%s is online (orchestrator)", reg.Name)
@@ -88,14 +112,6 @@ func runRegister(args []string) error {
 	}
 
 	fmt.Printf("\nRegistered orchestrator: %s\n", reg.Name)
-	fmt.Println("\nExport these in your session:")
-	fmt.Printf("  export AGENT_MAIL_PROJECT='%s'\n", absRoot)
-	fmt.Printf("  export AGENT_MAIL_AGENT='%s'\n", reg.Name)
-	fmt.Printf("  export AGENT_MAIL_URL='%s'\n", amCfg.URL)
-	fmt.Printf("  export AGENT_MAIL_TOKEN='%s'\n", amCfg.Token)
-	fmt.Printf("  export AGENT_MAIL_INTERVAL=120\n")
-	fmt.Printf("  export AGENT_MAIL_OPERATOR='%s'\n", operator)
-
 	return nil
 }
 
