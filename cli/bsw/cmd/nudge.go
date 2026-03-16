@@ -13,7 +13,7 @@ import (
 func runNudge(args []string) error {
 	fs := flag.NewFlagSet("nudge", flag.ContinueOnError)
 	project := fs.String("project", ".", "project root directory")
-	msg := fs.String("msg", "You have messages. Check your inbox (fetch_inbox).", "message to send")
+	msg := fs.String("msg", "Keep working. Check your inbox for new messages.", "message to send")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -38,8 +38,13 @@ func runNudge(args []string) error {
 	}
 
 	if entry.Mode == "tmux" && entry.Pane != "" {
-		cmd := exec.Command("tmux", "send-keys", "-t", entry.Pane, *msg, "Enter")
-		if err := cmd.Run(); err != nil {
+		// Clear any partial input on the line, then type message + Enter
+		// C-c cancels current input, C-u clears the line
+		clearCmd := exec.Command("tmux", "send-keys", "-t", entry.Pane, "C-c", "C-u")
+		_ = clearCmd.Run() // best-effort
+
+		sendCmd := exec.Command("tmux", "send-keys", "-t", entry.Pane, *msg, "Enter")
+		if err := sendCmd.Run(); err != nil {
 			return fmt.Errorf("tmux send-keys failed: %w", err)
 		}
 		fmt.Printf("Nudged worker %s (tmux pane %s + cleared rate-limit)\n", workerID, entry.Pane)

@@ -49,8 +49,10 @@ func runRegister(args []string) error {
 		return fmt.Errorf("create .bsw dir: %w", err)
 	}
 	orchData, err := json.MarshalIndent(map[string]string{
-		"name":    reg.Name,
-		"project": absRoot,
+		"name":     reg.Name,
+		"project":  absRoot,
+		"am_url":   amCfg.URL,
+		"am_token": amCfg.Token,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal orchestrator data: %w", err)
@@ -79,26 +81,30 @@ func runRegister(args []string) error {
 		signalBridge()
 	}
 
-	// Save orchestrator as a worker entry so nudge can find the tmux pane
+	// Save orchestrator as a worker entry so nudge can find the tmux pane.
+	// Use the pane's PID (the shell/agent running in it), not our own short-lived PID.
 	pane := currentTmuxPane()
 	if pane != "" {
-		regEntry := process.WorkerEntry{
-			WorkerID:      reg.Name,
-			Persona:       *personaName,
-			Provider:      "claude",
-			Mode:          "tmux",
-			PID:           os.Getpid(),
-			Pane:          pane,
-			StartedAt:     time.Now().UTC().Format(time.RFC3339),
-			StartTimeNs:   process.ProcStartTime(os.Getpid()),
-			Log:           "",
-			AgentMailName: reg.Name,
-		}
-		workerReg := process.NewRegistry(root)
-		if err := workerReg.Save(regEntry); err != nil {
-			fmt.Printf("  warn: worker registry save failed: %v\n", err)
-		} else {
-			fmt.Printf("  registry: saved pane %s for nudge\n", pane)
+		panePID := tmuxPanePID(pane)
+		if panePID > 0 {
+			regEntry := process.WorkerEntry{
+				WorkerID:      reg.Name,
+				Persona:       *personaName,
+				Provider:      "claude",
+				Mode:          "tmux",
+				PID:           panePID,
+				Pane:          pane,
+				StartedAt:     time.Now().UTC().Format(time.RFC3339),
+				StartTimeNs:   process.ProcStartTime(panePID),
+				Log:           "",
+				AgentMailName: reg.Name,
+			}
+			workerReg := process.NewRegistry(root)
+			if err := workerReg.Save(regEntry); err != nil {
+				fmt.Printf("  warn: worker registry save failed: %v\n", err)
+			} else {
+				fmt.Printf("  registry: saved pane %s (pid=%d) for nudge\n", pane, panePID)
+			}
 		}
 	}
 
@@ -131,10 +137,11 @@ func defaultBridgeConfig() string {
 	if v := os.Getenv("BSW_BRIDGE_CONFIG"); v != "" {
 		return v
 	}
-	// Check common locations
+	home := os.Getenv("HOME")
+	// Check common locations (generic first, then legacy)
 	candidates := []string{
-		filepath.Join(os.Getenv("HOME"), "projects/openclaw/config.yaml"),
-		filepath.Join(os.Getenv("HOME"), ".bsw-bridge.yaml"),
+		filepath.Join(home, ".bsw", "bridge.yaml"),
+		filepath.Join(home, "projects/openclaw/config.yaml"),
 	}
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
@@ -193,9 +200,11 @@ func updateBridgeConfig(configPath, projectKey, orchestrator, channel string) (b
 
 // signalBridge sends SIGHUP to the running bridge process.
 func signalBridge() {
-	// Find bridge PID from common locations
+	home := os.Getenv("HOME")
+	// Check PID files in common locations
 	candidates := []string{
-		filepath.Join(os.Getenv("HOME"), "projects/openclaw/bridge.pid"),
+		filepath.Join(home, ".bsw", "bridge.pid"),
+		filepath.Join(home, "projects/openclaw/bridge.pid"),
 	}
 
 	for _, pidFile := range candidates {
@@ -214,8 +223,7 @@ func signalBridge() {
 		}
 	}
 
-	// Try finding bridge by process name
-	// Use pgrep as fallback
+	// Fallback: find bridge by process name
 	if out, err := findBridgePID(); err == nil && out > 0 {
 		proc, _ := os.FindProcess(out)
 		if proc != nil {
