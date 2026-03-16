@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"boring-swarm/cli/bsw/beads"
@@ -24,6 +26,9 @@ func runGC(args []string) error {
 		return err
 	}
 
+	// Load orchestrator name so we never gc the orchestrator itself
+	orchName := loadOrchestratorName(root)
+
 	reg := process.NewRegistry(root)
 	entries, err := reg.LoadAll()
 	if err != nil {
@@ -33,23 +38,40 @@ func runGC(args []string) error {
 	client := beads.Client{Workdir: root}
 	cleaned := 0
 	for _, e := range entries {
+		// Never touch the orchestrator entry
+		if orchName != "" && e.WorkerID == orchName {
+			continue
+		}
+
 		s := monitor.CheckWorker(e, 0)
 		if s.State == monitor.Running || s.State == monitor.Stale {
 			continue // still alive
 		}
 
-		// For orphans (pane gone but PID alive), verify PID ownership then terminate
+		// For orphans (pane gone but PID alive):
+		// - tmux mode: pane is already gone, just clean registry (no process group kill)
+		// - bg mode: verify PID ownership then terminate
 		if s.State == monitor.Orphan {
-			if *dryRun {
-				fmt.Printf("  [dry-run] would terminate orphan %s (pid=%d) and clean\n", e.WorkerID, e.PID)
-			} else {
-				if process.IsOurProcess(e.PID, e.StartTimeNs) {
-					if err := process.Terminate(e.PID); err != nil {
-						fmt.Fprintf(os.Stderr, "  warning: terminate orphan %s: %v\n", e.WorkerID, err)
-						continue // don't clean up if we can't terminate
-					}
+			if e.Mode == "tmux" {
+				// Pane is gone — the process will exit on its own or is already
+				// detached. Don't Kill(-pid) which could hit the wrong process group.
+				if *dryRun {
+					fmt.Printf("  [dry-run] would clean orphan %s (tmux pane gone, pid=%d)\n", e.WorkerID, e.PID)
 				} else {
-					fmt.Fprintf(os.Stderr, "  warning: orphan %s PID %d was reused, skipping termination\n", e.WorkerID, e.PID)
+					fmt.Printf("  Orphan %s: pane gone, cleaning registry only (pid=%d)\n", e.WorkerID, e.PID)
+				}
+			} else {
+				if *dryRun {
+					fmt.Printf("  [dry-run] would terminate orphan %s (pid=%d) and clean\n", e.WorkerID, e.PID)
+				} else {
+					if process.IsOurProcess(e.PID, e.StartTimeNs) {
+						if err := process.Terminate(e.PID); err != nil {
+							fmt.Fprintf(os.Stderr, "  warning: terminate orphan %s: %v\n", e.WorkerID, err)
+							continue // don't clean up if we can't terminate
+						}
+					} else {
+						fmt.Fprintf(os.Stderr, "  warning: orphan %s PID %d was reused, skipping termination\n", e.WorkerID, e.PID)
+					}
 				}
 			}
 		}
@@ -78,4 +100,19 @@ func runGC(args []string) error {
 		fmt.Printf("Cleaned %d workers\n", cleaned)
 	}
 	return nil
+}
+
+// loadOrchestratorName reads the orchestrator name from .bsw/orchestrator.json.
+func loadOrchestratorName(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, ".bsw", "orchestrator.json"))
+	if err != nil {
+		return ""
+	}
+	var orch struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &orch); err != nil {
+		return ""
+	}
+	return orch.Name
 }

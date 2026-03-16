@@ -14,6 +14,7 @@ import (
 func runStop(args []string) error {
 	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
 	project := fs.String("project", ".", "project root directory")
+	all := fs.Bool("all", false, "also stop the orchestrator")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -21,6 +22,9 @@ func runStop(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Load orchestrator name so we skip it unless --all
+	orchName := loadOrchestratorName(root)
 
 	reg := process.NewRegistry(root)
 	entries, err := reg.LoadAll()
@@ -35,6 +39,11 @@ func runStop(args []string) error {
 	client := beads.Client{Workdir: root}
 	killed := 0
 	for _, e := range entries {
+		// Skip orchestrator unless --all
+		if !*all && orchName != "" && e.WorkerID == orchName {
+			continue
+		}
+
 		// Verify PID belongs to us
 		if !process.IsOurProcess(e.PID, e.StartTimeNs) {
 			fmt.Fprintf(os.Stderr, "  warning: %s PID %d no longer our process, cleaning registry only\n", e.WorkerID, e.PID)
