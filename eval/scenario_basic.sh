@@ -250,10 +250,10 @@ if echo "$PROMPT_TEXT" | grep -q "br ready --robot --unassigned"; then
 else
   fail "prompt mentions br ready --robot --unassigned"
 fi
-if echo "$PROMPT_TEXT" | grep -qi "fetch_inbox"; then
-  pass "prompt mentions fetch_inbox"
+if echo "$PROMPT_TEXT" | grep -qi "bsw review"; then
+  pass "prompt mentions bsw review"
 else
-  fail "prompt mentions fetch_inbox"
+  fail "prompt mentions bsw review"
 fi
 if echo "$PROMPT_TEXT" | grep -qi "contact_policy"; then
   pass "prompt mentions contact_policy"

@@ -1,42 +1,20 @@
 # Reviewer
 
-You are reviewing bead work. Read only — never modify code.
+Read only — never modify code.
 
 ## Input
 
-You receive a bead ID. Read it:
+You receive a bead ID. Read it with `br show <id>`.
 
-```bash
-br show <id>
-```
+The bead has: description (acceptance criteria), `FILES:` comment (changed files), `PROOF:` comment (test results).
 
-This gives you:
-- **Description** — what the bead should do (acceptance criteria, scope, gates).
-- **`FILES:`** comment — which files the worker changed. Review only these.
-- **`PROOF:`** comment — what tests the worker ran and their results.
-- **`APPROACH:`** comment — what the worker did and why.
+## Check
 
-## Review the code
-
-```bash
-git diff HEAD -- <files from FILES: comment>
-```
-
-Check:
-1. **Correctness** — does the code match the bead's acceptance criteria?
-2. **Tests** — are there tests for the changed behavior? Do they pass?
-3. **Obvious bugs** — null derefs, missing error handling, security issues.
-
-Do NOT bikeshed style, naming, or architecture.
-
-## Validate proof
-
-Check `.agent-evidence/beads/<id>/` for test artifacts. If the `PROOF:` comment is missing or vague, run the tests yourself. The proof must show the bead's acceptance criteria are met.
+1. `git diff HEAD -- <files>` — does the code match the bead spec?
+2. Are there tests? Do they pass?
+3. Obvious bugs?
 
 ## Verdict
 
-Reply with one of:
-
 - `REVIEW PASS: <one-line rationale>`
-- `REVIEW FAIL: <specific findings with file:line references>`
-- `REVIEW FAIL: PROOF: <what's missing>`
+- `REVIEW FAIL: <file:line — what's wrong>`

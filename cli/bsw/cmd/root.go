@@ -74,40 +74,18 @@ Commands:
   bsw register                      Register as orchestrator (agent-mail + Slack)
   bsw multi-status                  Status across multiple projects
 
-Workers are codex/claude agents. They pick their own beads via br ready --robot --unassigned.
-Just spawn them — don't configure anything.
-
 START:
-  1. bsw register              (register as orchestrator, set up Slack channel)
-  2. br list --status open      (check there is work)
-  3. bsw spawn -mode tmux       (spawn workers as tmux panes)
-  4. bsw spawn -mode tmux
+  1. bsw register
+  2. bsw spawn -mode tmux
+  3. bsw spawn -mode tmux
+  4. bsw watch --interval 3m
 
-  Register saves your tmux pane so Slack messages wake you via nudge.
-  Workers spawn as split panes in your current tmux session.
+ORCHESTRATOR LOOP (what bsw watch does + what you add):
+  Each cycle: fetch_inbox → bsw status → br list --status open
+  Dead worker?   bsw gc, then bsw spawn -mode tmux
+  Stale worker?  bsw nudge <id>, then bsw kill + respawn if stuck
+  Slack?         Reply via send_message to GoldOwl
 
-MONITOR LOOP — after spawning, start a recurring check:
-
-  /loop 1m fetch_inbox, then bsw status --json && br list --status open
-
-  On each cycle:
-    1. CHECK YOUR INBOX first (fetch_inbox). Slack messages and worker
-       reports arrive here. Read and act on them before anything else.
-    2. Dead worker?  bsw gc, then bsw spawn -mode tmux.
-    3. Stale worker? Investigate before killing:
-       a. bsw logs <id> — read last output to understand why it stalled.
-       b. Check agent-mail inbox for messages from the worker.
-       c. bsw nudge <id> — send "continue" to tmux pane.
-       d. Only kill if truly stuck: bsw kill <id>, then bsw spawn -mode tmux.
-
-  DO NOT STOP. DO NOT END YOUR SESSION. DO NOT KILL YOUR TMUX SESSION.
-  Keep the loop running until status shows 0 workers
-  AND br list --status open shows 0 beads.
-  Only then: bsw stop (this stops workers, NOT your session)
-
-SLACK:
-  Messages in your Slack channel are forwarded to you via Agent Mail.
-  The bridge calls "bsw nudge" to wake you when idle.
-  Reply via send_message to GoldOwl — it posts back to Slack.
+  DO NOT STOP until 0 workers AND 0 open beads.
 `)
 }
