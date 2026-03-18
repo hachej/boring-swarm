@@ -34,16 +34,39 @@ Implement the changes. Run tests. Provide proof it works.
 
 **Check your inbox (fetch_inbox) after completing implementation** — not on every turn.
 
-### 3. Record changed files
+### 3. Update bead with review context
+
+Before requesting review, leave structured comments on the bead so the reviewer has full context. This is what makes the difference between a useful review and a waste of tokens.
+
+**a) Record changed files** (required):
 
 ```bash
 br comments add <id> "FILES: $(git diff --name-only HEAD)"
 ```
 
+**b) Record proof** (required) — what you ran and what passed:
+
+```bash
+br comments add <id> "PROOF: <command you ran>
+<paste key output lines — pass/fail counts, no full logs>"
+```
+
+Example: `PROOF: pytest tests/unit/test_sandbox.py -v — 12 passed, 0 failed`
+
+**c) Record approach** (recommended for non-trivial beads):
+
+```bash
+br comments add <id> "APPROACH: <1-2 lines on what you did and why>"
+```
+
+Example: `APPROACH: Added sandbox/exec POST endpoint with workspace-scoped auth. Used existing ValidatedExecBackend, registered in capabilities.`
+
+The reviewer reads `br show <id>` and sees: bead spec + your FILES + PROOF + APPROACH. That's everything needed for a focused review.
+
 ### 4. Review
 
 ```bash
-bsw review -bead <id> "Check correctness, test coverage, edge cases."
+bsw review -bead <id>
 ```
 
 **Handle the result:**
