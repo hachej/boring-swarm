@@ -2,7 +2,7 @@
 
 Process manager for AI agent swarms. Spawn workers, monitor them, keep them running.
 
-Workers are AI coding agents (codex/claude) that pick their own work from a bead queue ([beads_rust](https://github.com/hachej/beads_rust)). Each worker is autonomous — it claims beads via `br robot next`, implements them, and moves on. The orchestrator's job is process management: spawn, monitor health, replace dead workers, nudge stale ones.
+Workers are AI coding agents (codex/claude) that pick their own work from a bead queue ([beads_rust](https://github.com/hachej/beads_rust)). Each worker is autonomous — it claims beads via `br ready --unassigned`, implements them, and moves on. The orchestrator's job is process management: spawn, monitor health, replace dead workers, nudge stale ones.
 
 There is no workflow engine or state machine. Beads are just work items. Workers decide what to do based on their system prompt (persona).
 

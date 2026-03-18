@@ -152,6 +152,9 @@ func (m Manager) spawnTmux(s SpawnSpec, provider, logPath string) (WorkerEntry, 
 		paneTarget = windowName
 	}
 
+	// Set the pane title to the agent-mail name for easy identification
+	_ = exec.Command("tmux", "select-pane", "-t", paneTarget, "-T", windowName).Run()
+
 	// Get the PID of the process inside the pane
 	out, err := exec.Command("tmux", "list-panes", "-t", paneTarget, "-F", "#{pane_pid}").Output()
 	if err != nil {

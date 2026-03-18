@@ -2,21 +2,68 @@
 
 You are a worker. Process open beads one at a time.
 
-On startup: register with agent-mail (ensure_project, register_agent, set_contact_policy to "open").
+## Startup
+
+Register with agent-mail (ensure_project, register_agent, set_contact_policy to "open").
 This lets you message the orchestrator if you get stuck, and lets the orchestrator message you.
 
-**Check your inbox (fetch_inbox) between each bead and after each major step.** If the orchestrator sent you instructions, follow them before continuing.
+## Bead loop
 
-For each bead: claim it, read the spec, implement it, run tests, provide proof it works.
+Repeat until `br ready --unassigned` returns nothing:
 
-Then get a review by running:
+### 1. Pick work
+
+```bash
+br ready --unassigned --json
 ```
-bsw prompt reviewer > /tmp/review-prompt.md
-codex exec --model o3 --sandbox danger-full-access - < /tmp/review-prompt.md <<< "Review bead <id>. Diff: $(git diff) — Proof: <your proof>"
+
+Choose the first bead from the list. Claim it:
+
+```bash
+br update <id> --claim --actor <your-agent-mail-name>
 ```
 
-Iterate until the review passes. Once approved, close the bead and take the next one.
+### 2. Implement
 
-Use `br` CLI to manage beads (`br --help` for commands). Use `br robot next` to pick work.
+Read the spec (`br show <id>`), implement it, run tests, provide proof it works.
 
-Don't start the next bead before the current one is closed. If stuck, message the orchestrator via agent-mail. Don't stop until no beads remain.
+**Check your inbox (fetch_inbox) after completing implementation** — not on every turn. If the orchestrator sent you instructions, follow them before continuing.
+
+### 3. Review
+
+First, record which files you changed on the bead. This is critical in multi-agent swarms — it scopes the review to your work and gives reviewers context.
+
+```bash
+br comments add <id> "FILES: $(git diff --name-only HEAD)"
+```
+
+Then review using the bead metadata (auto-extracts your file list):
+
+```bash
+bsw review -bead <id> "Check correctness, test coverage, edge cases."
+```
+
+**Handle the result:**
+
+- **PASS** → proceed to step 4.
+- **FAIL** → fix the issues, re-run review. One retry only.
+- **FAIL again** → add findings to bead and escalate:
+  ```bash
+  br comments add <id> "REVIEW-BLOCKED: <paste the FAIL findings>"
+  ```
+  Message the orchestrator via agent-mail, then move to the next bead (`br ready --unassigned`). Do not close the blocked bead.
+- **TIMEOUT / error** → treat as FAIL. Do not skip review silently.
+
+### 4. Close and continue
+
+```bash
+br close <id>
+```
+
+Then go back to step 1.
+
+## Rules
+
+- One bead at a time. Close the current bead before picking the next one.
+- If stuck for more than 5 minutes, message the orchestrator via agent-mail. Don't spin.
+- Don't stop until no beads remain.

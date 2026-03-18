@@ -38,6 +38,8 @@ func Execute(args []string) error {
 		return runRegister(args[1:])
 	case "multi-status":
 		return runMultiStatus(args[1:])
+	case "review":
+		return runReview(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -66,10 +68,11 @@ Commands:
   bsw watch [--interval 30s]        Continuous monitor loop
   bsw list-work --label <label>     Show available beads by label
   bsw prompt <persona>              Print a persona's system prompt
+  bsw review [prompt]               Run code review (auto-detects codex/claude/gemini)
   bsw register                      Register as orchestrator (agent-mail + Slack)
   bsw multi-status                  Status across multiple projects
 
-Workers are codex/claude agents. They pick their own beads via br robot next.
+Workers are codex/claude agents. They pick their own beads via br ready --unassigned.
 Just spawn them — don't configure anything.
 
 START:
@@ -83,7 +86,7 @@ START:
 
 MONITOR LOOP — after spawning, start a recurring check:
 
-  /loop 1m bsw status --json && br list --status open
+  /loop 1m fetch_inbox, then bsw status --json && br list --status open
 
   On each cycle:
     1. CHECK YOUR INBOX first (fetch_inbox). Slack messages and worker

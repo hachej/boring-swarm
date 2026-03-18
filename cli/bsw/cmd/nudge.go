@@ -39,8 +39,8 @@ func runNudge(args []string) error {
 
 	if entry.Mode == "tmux" && entry.Pane != "" {
 		// Clear any partial input on the line, then type message + Enter
-		// C-c cancels current input, C-u clears the line
-		clearCmd := exec.Command("tmux", "send-keys", "-t", entry.Pane, "C-c", "C-u")
+		// C-u clears the line (do NOT send C-c — it kills the agent process)
+		clearCmd := exec.Command("tmux", "send-keys", "-t", entry.Pane, "C-u")
 		_ = clearCmd.Run() // best-effort
 
 		sendCmd := exec.Command("tmux", "send-keys", "-t", entry.Pane, *msg, "Enter")
