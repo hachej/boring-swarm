@@ -1,6 +1,10 @@
 package cmd
 
-import "fmt"
+import (
+	"fmt"
+
+	"boring-swarm/cli/bsw/templates"
+)
 
 func Execute(args []string) error {
 	if len(args) == 0 {
@@ -52,8 +56,6 @@ func Execute(args []string) error {
 func printUsage() {
 	fmt.Print(`bsw - swarm process manager
 
-You are an orchestrator. Spawn workers, monitor them, keep them running.
-
 Commands:
   bsw init                          Scaffold personas and prompts
   bsw spawn                         Spawn a worker
@@ -67,25 +69,16 @@ Commands:
   bsw doctor [--fix]                Check setup
   bsw watch [--interval 30s]        Continuous monitor loop
   bsw list-work --label <label>     Show available beads by label
-  bsw prompt <name>                 Print a prompt (persona or library)
-  bsw prompt <category/name>        Print from shared library (e.g. review/fresh_eyes)
-  bsw prompt --list                 List all available prompts
-  bsw review [prompt]               Run code review (auto-detects codex/claude/gemini)
+  bsw prompt <name>                 Print a prompt (worker, reviewer, orchestrator)
+  bsw prompt list                   List all available prompts
+  bsw review [-bead <id>]           Run code review (roborev/claude/gemini/codex)
   bsw register                      Register as orchestrator (agent-mail + Slack)
   bsw multi-status                  Status across multiple projects
 
-START:
-  1. bsw register
-  2. bsw spawn -mode tmux
-  3. bsw spawn -mode tmux
-  4. bsw watch --interval 3m
-
-ORCHESTRATOR LOOP (what bsw watch does + what you add):
-  Each cycle: fetch_inbox → bsw status → br list --status open
-  Dead worker?   bsw gc, then bsw spawn -mode tmux
-  Stale worker?  bsw nudge <id>, then bsw kill + respawn if stuck
-  Slack?         Reply via send_message to GoldOwl
-
-  DO NOT STOP until 0 workers AND 0 open beads.
 `)
+	// Print orchestrator prompt from the single source of truth
+	data, err := templates.Personas.ReadFile("personas/prompts/orchestrator.md")
+	if err == nil {
+		fmt.Print(string(data))
+	}
 }
