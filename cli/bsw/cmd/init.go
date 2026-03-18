@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"boring-swarm/cli/bsw/templates"
 )
@@ -22,6 +23,7 @@ func runInit(args []string) error {
 	}
 
 	created := 0
+	updated := 0
 	skipped := 0
 
 	err = fs.WalkDir(templates.Personas, ".", func(path string, d fs.DirEntry, err error) error {
@@ -34,11 +36,16 @@ func runInit(args []string) error {
 			return os.MkdirAll(dest, 0o755)
 		}
 
-		// Don't overwrite existing files
+		// Always update prompt files (.md) to keep them in sync with latest bsw.
+		// Preserve user-customized config files (.toml).
+		exists := false
 		if _, err := os.Stat(dest); err == nil {
-			skipped++
-			fmt.Printf("  skip  %s (exists)\n", path)
-			return nil
+			exists = true
+			if !strings.HasSuffix(path, ".md") {
+				skipped++
+				fmt.Printf("  skip  %s (exists)\n", path)
+				return nil
+			}
 		}
 
 		data, err := templates.Personas.ReadFile(path)
@@ -52,14 +59,19 @@ func runInit(args []string) error {
 		if err := os.WriteFile(dest, data, 0o644); err != nil {
 			return err
 		}
-		created++
-		fmt.Printf("  create  %s\n", path)
+		if exists {
+			updated++
+			fmt.Printf("  update  %s\n", path)
+		} else {
+			created++
+			fmt.Printf("  create  %s\n", path)
+		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("\nInitialized: %d created, %d skipped\n", created, skipped)
+	fmt.Printf("\nInitialized: %d created, %d updated, %d skipped\n", created, updated, skipped)
 	return nil
 }
