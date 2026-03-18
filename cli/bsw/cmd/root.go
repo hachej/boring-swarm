@@ -67,7 +67,9 @@ Commands:
   bsw doctor [--fix]                Check setup
   bsw watch [--interval 30s]        Continuous monitor loop
   bsw list-work --label <label>     Show available beads by label
-  bsw prompt <persona>              Print a persona's system prompt
+  bsw prompt <name>                 Print a prompt (persona or library)
+  bsw prompt <category/name>        Print from shared library (e.g. review/fresh_eyes)
+  bsw prompt --list                 List all available prompts
   bsw review [prompt]               Run code review (auto-detects codex/claude/gemini)
   bsw register                      Register as orchestrator (agent-mail + Slack)
   bsw multi-status                  Status across multiple projects
