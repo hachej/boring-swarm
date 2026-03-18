@@ -74,7 +74,7 @@ Commands:
   bsw register                      Register as orchestrator (agent-mail + Slack)
   bsw multi-status                  Status across multiple projects
 
-Workers are codex/claude agents. They pick their own beads via br ready --unassigned.
+Workers are codex/claude agents. They pick their own beads via br ready --robot --unassigned.
 Just spawn them — don't configure anything.
 
 START:

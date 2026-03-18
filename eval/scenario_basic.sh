@@ -245,10 +245,10 @@ if echo "$PROMPT_TEXT" | grep -q "agent-mail"; then
 else
   fail "prompt mentions agent-mail"
 fi
-if echo "$PROMPT_TEXT" | grep -q "br ready --unassigned"; then
-  pass "prompt mentions br ready --unassigned"
+if echo "$PROMPT_TEXT" | grep -q "br ready --robot --unassigned"; then
+  pass "prompt mentions br ready --robot --unassigned"
 else
-  fail "prompt mentions br ready --unassigned"
+  fail "prompt mentions br ready --robot --unassigned"
 fi
 if echo "$PROMPT_TEXT" | grep -qi "fetch_inbox"; then
   pass "prompt mentions fetch_inbox"

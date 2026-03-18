@@ -4,20 +4,27 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"boring-swarm/cli/bsw/persona"
 )
 
-// Default search path for the shared prompt library.
-// Override with BSW_PROMPT_LIB env var.
-const defaultPromptLib = "/home/ubuntu/projects/boring-coding/prompts"
+// promptLibRepo is the git repo for the shared prompt library.
+const promptLibRepo = "https://github.com/boringdata/boring-coding.git"
+
+// promptLibCache is where we sparse-checkout the prompts dir.
+func promptLibCache() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".bsw", "prompt-lib")
+}
 
 func runPrompt(args []string) error {
 	fs := flag.NewFlagSet("prompt", flag.ContinueOnError)
 	project := fs.String("project", ".", "project root directory")
 	list := fs.Bool("list", false, "list all available prompts")
+	sync := fs.Bool("sync", false, "pull latest prompts from boring-coding main")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -27,7 +34,11 @@ func runPrompt(args []string) error {
 		return err
 	}
 
-	libDir := promptLibDir()
+	libDir := resolvePromptLib()
+
+	if *sync {
+		return syncPromptLib()
+	}
 
 	if *list {
 		return listPrompts(root, libDir)
@@ -36,7 +47,8 @@ func runPrompt(args []string) error {
 	if fs.NArg() == 0 {
 		return fmt.Errorf("usage: bsw prompt <name>           (persona: worker, reviewer)\n" +
 			"       bsw prompt <category/name>   (library: review/fresh_eyes, research/go_deeper)\n" +
-			"       bsw prompt --list             (show all available prompts)")
+			"       bsw prompt --list             (show all available prompts)\n" +
+			"       bsw prompt --sync             (pull latest from boring-coding main)")
 	}
 	name := fs.Arg(0)
 
@@ -67,7 +79,6 @@ func runPrompt(args []string) error {
 			if err != nil {
 				return fmt.Errorf("read prompt: %w", err)
 			}
-			// Show which one we resolved to
 			rel, _ := filepath.Rel(libDir, match)
 			fmt.Fprintf(os.Stderr, "bsw prompt: resolved to %s\n", rel)
 			fmt.Print(string(data))
@@ -75,14 +86,147 @@ func runPrompt(args []string) error {
 		}
 	}
 
-	return fmt.Errorf("prompt %q not found (checked personas/ and %s)", name, libDir)
+	return fmt.Errorf("prompt %q not found (checked personas/ and %s)\nRun 'bsw prompt --sync' to pull latest prompts", name, libDir)
 }
 
-func promptLibDir() string {
+// resolvePromptLib returns the prompt library directory.
+// Priority: BSW_PROMPT_LIB env > local clone > cached sparse checkout.
+func resolvePromptLib() string {
+	// Explicit override
 	if v := os.Getenv("BSW_PROMPT_LIB"); v != "" {
 		return v
 	}
-	return defaultPromptLib
+
+	// Local clone (if boring-coding is checked out nearby)
+	localPaths := []string{
+		filepath.Join(os.Getenv("HOME"), "projects", "boring-coding", "prompts"),
+		"/home/ubuntu/projects/boring-coding/prompts",
+	}
+	for _, p := range localPaths {
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			// Fetch latest in background (non-blocking, best-effort)
+			repoDir := filepath.Dir(p)
+			go func() {
+				_ = exec.Command("git", "-C", repoDir, "fetch", "-q", "origin", "main").Run()
+				_ = exec.Command("git", "-C", repoDir, "merge", "--ff-only", "-q", "origin/main").Run()
+			}()
+			return p
+		}
+	}
+
+	// Cached sparse checkout
+	cache := promptLibCache()
+	promptsDir := filepath.Join(cache, "prompts")
+	if info, err := os.Stat(promptsDir); err == nil && info.IsDir() {
+		// Fetch latest in background
+		go func() {
+			_ = exec.Command("git", "-C", cache, "fetch", "-q", "origin", "main").Run()
+			_ = exec.Command("git", "-C", cache, "merge", "--ff-only", "-q", "origin/main").Run()
+		}()
+		return promptsDir
+	}
+
+	// Not available yet — trigger sync
+	fmt.Fprintln(os.Stderr, "bsw prompt: library not cached yet, run 'bsw prompt --sync'")
+	return promptsDir
+}
+
+// syncPromptLib clones or pulls the prompt library.
+func syncPromptLib() error {
+	// If local clone exists, fetch and reset main to origin
+	localRepo := filepath.Join(os.Getenv("HOME"), "projects", "boring-coding")
+	if _, err := os.Stat(filepath.Join(localRepo, "prompts")); err == nil {
+		fmt.Fprintf(os.Stderr, "bsw prompt: fetching %s ...\n", localRepo)
+		fetch := exec.Command("git", "-C", localRepo, "fetch", "origin", "main")
+		fetch.Stderr = os.Stderr
+		if err := fetch.Run(); err != nil {
+			return fmt.Errorf("git fetch failed: %w", err)
+		}
+		// Show what changed in prompts/
+		diff := exec.Command("git", "-C", localRepo, "diff", "--stat", "HEAD..origin/main", "--", "prompts/")
+		diff.Stdout = os.Stderr
+		diff.Run()
+		// Fast-forward main if on it, otherwise just report
+		branch, _ := exec.Command("git", "-C", localRepo, "branch", "--show-current").Output()
+		if strings.TrimSpace(string(branch)) == "main" {
+			merge := exec.Command("git", "-C", localRepo, "merge", "--ff-only", "origin/main")
+			merge.Stdout = os.Stderr
+			merge.Stderr = os.Stderr
+			merge.Run() // best-effort, may fail if dirty
+		}
+		fmt.Fprintln(os.Stderr, "bsw prompt: synced")
+		return nil
+	}
+
+	// Sparse checkout into cache (only prompts/ dir)
+	cache := promptLibCache()
+	if _, err := os.Stat(filepath.Join(cache, ".git")); err == nil {
+		// Already cloned, just pull
+		fmt.Fprintf(os.Stderr, "bsw prompt: pulling %s ...\n", cache)
+		cmd := exec.Command("git", "-C", cache, "pull", "--ff-only")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	// Fresh sparse clone
+	fmt.Fprintf(os.Stderr, "bsw prompt: cloning prompts from %s ...\n", promptLibRepo)
+
+	// Get GitHub token for private repo access
+	token := gitHubToken()
+
+	repoURL := promptLibRepo
+	if token != "" {
+		repoURL = strings.Replace(repoURL, "https://", "https://oauth2:"+token+"@", 1)
+	}
+
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		return err
+	}
+
+	// Init + sparse checkout for just prompts/
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "remote", "add", "origin", repoURL},
+		{"git", "config", "core.sparseCheckout", "true"},
+	}
+	for _, c := range cmds {
+		cmd := exec.Command(c[0], c[1:]...)
+		cmd.Dir = cache
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("%s failed: %w", strings.Join(c, " "), err)
+		}
+	}
+
+	// Write sparse checkout config
+	scDir := filepath.Join(cache, ".git", "info")
+	os.MkdirAll(scDir, 0o755)
+	os.WriteFile(filepath.Join(scDir, "sparse-checkout"), []byte("prompts/\n"), 0o644)
+
+	// Pull
+	cmd := exec.Command("git", "pull", "--depth=1", "origin", "main")
+	cmd.Dir = cache
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git pull failed: %w", err)
+	}
+
+	fmt.Fprintln(os.Stderr, "bsw prompt: synced")
+	return nil
+}
+
+// gitHubToken tries to get a GitHub token from vault or env.
+func gitHubToken() string {
+	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
+		return v
+	}
+	out, err := exec.Command("vault", "kv", "get", "-field=token", "secret/agent/boringdata-agent").Output()
+	if err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
 }
 
 func listPrompts(projectRoot, libDir string) error {
@@ -125,7 +269,7 @@ func listPrompts(projectRoot, libDir string) error {
 			}
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "Library not found at %s (set BSW_PROMPT_LIB to override)\n", libDir)
+		fmt.Fprintf(os.Stderr, "Library not found. Run 'bsw prompt --sync' to fetch.\n")
 	}
 
 	return nil

@@ -8,12 +8,12 @@ Register with agent-mail (ensure_project, register_agent).
 
 ## Review loop
 
-Repeat until `br ready --unassigned` returns nothing:
+Repeat until `br ready --robot --unassigned` returns an empty list:
 
 ### 1. Pick work
 
 ```bash
-br ready --unassigned --json
+br ready --robot --unassigned
 ```
 
 Claim the first bead:
@@ -22,68 +22,63 @@ Claim the first bead:
 br update <id> --claim --actor <your-agent-mail-name>
 ```
 
-### 2. Review
-
-Read the bead with `br show <id>`. The bead contains structured metadata left by workers:
-
-- **`FILES:`** comment — list of files the worker changed. Scope your review to these.
-- **`PLAN:`** comment — the worker's approach and reference files.
-- **`REVIEW-BLOCKED:`** comment — prior review failures and findings.
-- **`.agent-evidence/beads/<id>/`** — test output, proof artifacts.
-
-Review only the worker's files:
+### 2. Read bead context
 
 ```bash
-git diff HEAD -- <files from the FILES: comment>
+br show <id>
 ```
 
-Or use the bsw shortcut:
+This gives you everything you need:
+- **Description** — what the bead is supposed to do (acceptance criteria, scope, gates).
+- **Comments** — structured metadata from the worker:
+  - `FILES:` — list of files the worker changed. Scope your review to these.
+  - `PLAN:` — the worker's approach and reference files.
+  - `REVIEW-BLOCKED:` — prior review failures.
+
+### 3. Review the code
+
+Diff only the worker's files (from the `FILES:` comment):
 
 ```bash
-bsw review -bead <id>
+git diff HEAD -- <files from FILES: comment>
 ```
 
-Evaluate against these criteria only:
-1. **Correctness** — does the code do what the bead spec says?
-2. **Tests** — are there tests? Do they pass? (`npm run test:run` or `pytest tests/ -v`)
-3. **Obvious bugs** — null derefs, missing error handling, security issues
+Evaluate:
+1. **Correctness** — does the code match the bead's acceptance criteria?
+2. **Tests** — are there tests for the changed behavior? Do they pass?
+3. **Obvious bugs** — null derefs, missing error handling, security issues.
 
-Do NOT bikeshed style, naming, or architecture. Stay focused.
+Do NOT bikeshed style, naming, or architecture. Stay focused on the bead spec.
 
-### 3. Validate proof
+### 4. Validate proof
 
-Check `.agent-evidence/beads/<id>/` for evidence left by the worker. If no evidence dir exists, run the tests yourself:
+Check `.agent-evidence/beads/<id>/` for evidence left by the worker. If no evidence exists, run the tests yourself:
 
 ```bash
-# Run the relevant test suite
 npm run test:run   # or pytest tests/ -v
 ```
 
-The proof must show the bead's acceptance criteria are met — not just "tests pass" but the *right* tests pass. If proof is missing or insufficient, FAIL with "PROOF: <what's missing>".
+The proof must demonstrate the bead's acceptance criteria are met — not just "tests pass" but the *right* tests pass. If proof is missing or insufficient, FAIL with `PROOF: <what's missing>`.
 
-### 4. Verdict
+### 5. Verdict
 
-If acceptable: close the bead with a brief comment.
+Add your verdict as a comment. The **worker** closes the bead — not you.
 
-```bash
-br comments add <id> "PASS: <one-line rationale>"
-br close <id>
-```
-
-If not: add specific, actionable feedback and reopen for the worker.
+Pass:
 
 ```bash
-br comments add <id> "FAIL: <specific findings with file:line references>"
-br reopen <id>
+br comments add <id> "REVIEW PASS: <one-line rationale>"
 ```
 
-### 5. Continue
+Fail:
 
-Go back to step 1.
+```bash
+br comments add <id> "REVIEW FAIL: <specific findings with file:line references>"
+```
 
 ## Rules
 
 - Never modify code. Review only.
-- One bead at a time.
-- Be specific — file paths, line numbers, concrete issues. No vague feedback.
+- Be specific — file paths, line numbers, concrete issues.
+- Pre-existing problems unrelated to this bead do not block approval.
 - If stuck, message the orchestrator via agent-mail.
