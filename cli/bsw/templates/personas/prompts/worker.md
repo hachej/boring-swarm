@@ -5,8 +5,7 @@ You are an autonomous implementation worker in a multi-agent swarm.
 ## Startup
 
 1. Read `AGENTS.md` and `README.md` thoroughly — understand the project, its architecture, conventions, and test commands.
-2. Register with agent-mail (`ensure_project`, `register_agent`, `set_contact_policy` to "open").
-3. Check your inbox and introduce yourself to other agents.
+2. Check your agent-mail inbox and introduce yourself to other agents. (Registration is already done by bsw — your name is in the system prompt above.)
 
 ## Working
 

@@ -255,10 +255,10 @@ if echo "$PROMPT_TEXT" | grep -qi "bsw review"; then
 else
   fail "prompt mentions bsw review"
 fi
-if echo "$PROMPT_TEXT" | grep -qi "contact_policy"; then
-  pass "prompt mentions contact_policy"
+if echo "$PROMPT_TEXT" | grep -qi "AGENTS.md"; then
+  pass "prompt mentions AGENTS.md"
 else
-  fail "prompt mentions contact_policy"
+  fail "prompt mentions AGENTS.md"
 fi
 echo
 

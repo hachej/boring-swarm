@@ -9,6 +9,7 @@ import (
 
 	"boring-swarm/cli/bsw/persona"
 	"boring-swarm/cli/bsw/process"
+	"boring-swarm/cli/bsw/templates"
 )
 
 func runSpawn(args []string) error {
@@ -81,11 +82,18 @@ func runSpawn(args []string) error {
 		return fmt.Errorf("worker %s is already running (kill it first with: bsw kill %s)", *workerID, *workerID)
 	}
 
-	// Read system prompt
+	// Read system prompt: try local file first, fall back to embedded template.
+	// This ensures spawn always uses the latest prompt even if the project
+	// has a stale copy from an older bsw init.
 	promptPath := filepath.Join(root, p.Prompt)
 	promptBytes, err := os.ReadFile(promptPath)
 	if err != nil {
-		return fmt.Errorf("read prompt %s: %w", promptPath, err)
+		// Local file missing — read from embedded templates
+		promptBytes, err = templates.Personas.ReadFile(p.Prompt)
+		if err != nil {
+			return fmt.Errorf("read prompt %s: %w", p.Prompt, err)
+		}
+		fmt.Printf("  prompt: using embedded template (%s not found locally)\n", promptPath)
 	}
 
 	// Inject the agent's own name into the system prompt so it knows its identity
