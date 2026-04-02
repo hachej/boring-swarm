@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"boring-swarm/cli/bsw/config"
 	"boring-swarm/cli/bsw/monitor"
 	"boring-swarm/cli/bsw/process"
 )
@@ -20,7 +21,7 @@ func projectStatus(root string) ([]monitor.Status, error) {
 		return nil, err
 	}
 
-	stallTimeout := 10 * time.Minute
+	stallTimeout := config.StaleTimeout()
 	statuses := make([]monitor.Status, 0, len(entries))
 	for _, e := range entries {
 		statuses = append(statuses, monitor.CheckWorker(e, stallTimeout))

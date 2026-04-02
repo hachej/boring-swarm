@@ -7,9 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"boring-swarm/cli/bsw/beads"
+	"boring-swarm/cli/bsw/config"
 	"boring-swarm/cli/bsw/monitor"
 	"boring-swarm/cli/bsw/persona"
 	"boring-swarm/cli/bsw/process"
@@ -87,7 +87,7 @@ func runDoctor(args []string) error {
 		stale := 0
 		running := 0
 		for _, e := range entries {
-			s := monitor.CheckWorker(e, 10*time.Minute)
+			s := monitor.CheckWorker(e, config.StaleTimeout())
 			switch s.State {
 			case monitor.Running:
 				running++
@@ -117,7 +117,7 @@ func runDoctor(args []string) error {
 
 	// 4. Check beads access
 	fmt.Println("\n[beads]")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), config.DoctorTimeout())
 	defer cancel()
 	client := beads.Client{Workdir: root}
 	allIssues, err := client.List(ctx, 0)

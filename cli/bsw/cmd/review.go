@@ -9,9 +9,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-)
 
-const defaultReviewTimeout = 90 * time.Second
+	"boring-swarm/cli/bsw/config"
+)
 
 func runReview(args []string) error {
 	fs := flag.NewFlagSet("review", flag.ContinueOnError)
@@ -20,7 +20,7 @@ func runReview(args []string) error {
 	project := fs.String("project", ".", "project root directory")
 	files := fs.String("files", "", "comma-separated list of files to review (scopes diff to only these files)")
 	bead := fs.String("bead", "", "bead ID — auto-extracts file list from bead's FILES: comments")
-	timeoutSec := fs.Int("timeout", 90, "review timeout in seconds (0 = no timeout)")
+	timeoutSec := fs.Int("timeout", config.ReviewTimeoutSec(), "review timeout in seconds (0 = no timeout)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

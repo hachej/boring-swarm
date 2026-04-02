@@ -1,0 +1,27 @@
+services:
+  bsw:
+    build: .
+    container_name: bsw
+    volumes:
+      # Mount project workspace
+      - ./:/workspace
+      # Mount provider CLIs from host (claude, codex, br)
+      - ${BSW_PROVIDER_BIN_DIR:-/usr/local/bin}:/host-bin:ro
+    environment:
+      # Timeout configuration
+      - BSW_STALE_TIMEOUT_SEC=${BSW_STALE_TIMEOUT_SEC:-600}
+      - BSW_DOCTOR_TIMEOUT_SEC=${BSW_DOCTOR_TIMEOUT_SEC:-15}
+      - BSW_REVIEW_TIMEOUT_SEC=${BSW_REVIEW_TIMEOUT_SEC:-90}
+      # Agent Mail
+      - AGENT_MAIL_URL=${AGENT_MAIL_URL:-}
+      - AGENT_MAIL_TOKEN=${AGENT_MAIL_TOKEN:-}
+      # Vault (for secrets)
+      - VAULT_ADDR=${VAULT_ADDR:-}
+      - VAULT_TOKEN=${VAULT_TOKEN:-}
+      # Provider binary overrides (point to host-mounted binaries)
+      - BSW_CLAUDE_BIN=${BSW_CLAUDE_BIN:-/host-bin/claude}
+      - BSW_CODEX_BIN=${BSW_CODEX_BIN:-/host-bin/codex}
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/host-bin
+    # Keep container running for interactive use
+    command: ["watch", "--interval", "30s"]
+    restart: unless-stopped

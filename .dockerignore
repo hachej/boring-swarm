@@ -1,0 +1,10 @@
+.git
+.bsw
+.github
+.pytest_cache
+.openclaw
+eval
+personas
+cli/bsw/bsw
+cli/bsw/coverage.out
+*.md
